@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+.env
+.env.*
+*.egg-info/
+.eggs/
+dist/
+build/
+.DS_Store
+.ipynb_checkpoints/
+.idea/
+.vscode/
+
+# 常见大文件（模型权重与数据；占位 md 仍可提交）
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.h5
