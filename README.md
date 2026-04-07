@@ -6,10 +6,6 @@
 
 We propose **FixATE**, a framework that aligns a frozen VLM's visual attention with each user's characteristic gaze pattern through interpretability-based probing and personalized soft prompt tuning, enabling more faithful user simulation in visual recommendation scenarios.
 
-<p align="center">
-  <img src="asserts/Fixate_framework.png" width="90%" alt="FixATE Framework Overview">
-</p>
-
 ## 📚 Contents
 
 - [Overview](#overview)
