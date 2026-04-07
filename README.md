@@ -13,7 +13,7 @@ This repository contains the official implementation of the paper:
 We propose **FixATE**, a framework that aligns a frozen VLM's visual attention with each user's characteristic gaze pattern through interpretability-based probing and personalized soft prompt tuning, enabling more faithful user simulation in visual recommendation scenarios.
 
 <p align="center">
-  <img src="assets/framework.png" width="90%" alt="FixATE Framework Overview">
+  <img src="asserts/Fixate_framework.png" width="90%" alt="FixATE Framework Overview">
 </p>
 
 ## 📚 Contents
@@ -46,185 +46,58 @@ Existing LLM-based user simulators perceive recommendations through text or stru
 
 ## 📦 Data Preparation
 
-### 1. Download Datasets
+Download [RecGaze](https://github.com/santideleon/RecGaze_Dataset) and [AdSERP](https://github.com/kayhan-latifzadeh/AdSERP) into `datasets/` (e.g. `RecGaze/`, `Adserp/`).
 
-We use two public eye-tracking datasets:
-
-| Dataset | Domain | Layout | Source |
-|---------|--------|--------|--------|
-| **RecGaze** | Movie recommendation | 3×5 carousel grid | [GitHub](https://github.com/santideleon/RecGaze_Dataset) |
-| **AdSERP** | Sponsored search | Vertical SERP | [GitHub](https://github.com/kayhan-latifzadeh/AdSERP) |
-
-Download the datasets and place them under `data/`:
-
-```
-datasets/
-├── recgaze/
-└── adserp/
-```
-
-### 2. RecGaze: preprocess swipe / gaze trials
-
-Filter `summary_feedback.csv` into a processed CSV (valid fixation rows, last click on Movie, etc.) for downstream use:
+**RecGaze**
 
 ```bash
-python preprocessing/recgaze/dataset_preprocess_swipes.py \
-  --summary datasets/RecGaze/summary_feedback.csv \
-  --out "datasets/RecGaze/init_interface_user_gaze(swipes).csv"
-```
-
-Defaults use the same paths under `datasets/RecGaze/`; use `--task-min` / `--task-max` to change the TaskID range (default 1–35).
-
-### 3. RecGaze: generate interface images
-
-Place raw CSVs under `datasets/raw/RecGaze/` (`summary_feedback.csv`, `item_features.csv`; posters go to `poster_cache/` as needed). The script replays swipe events, updates carousel state, and renders one final PNG per user–task:
-
-```bash
+python preprocessing/recgaze/dataset_preprocess_swipes.py
 python preprocessing/recgaze/generate_interface_iamge.py 1-35
-# 或：python preprocessing/recgaze/generate_interface_iamge.py all
 ```
 
-For a single user–task pair, pass both `--only-user` and `--only-task`.
+Raw inputs for the second step: `datasets/raw/RecGaze/` (`summary_feedback.csv`, `item_features.csv`, `poster_cache/`). Outputs: `datasets/RecGaze/init_interface_user_gaze(swipes).csv` and `datasets/RecGaze/interface_iamge/*.png`.
 
-### 4. AdSERP: build gaze samples (optional)
-
-Raw AdSERP data defaults to `datasets/Adserp/data` (override with `ADSERP_DATA_DIR`). Build full-page and/or scroll-stop samples:
+**AdSERP (optional)**
 
 ```bash
 python preprocessing/adserp/build_samples.py --mode both --n 5
-```
-
-Optional click-AOI viewport subset (expects `scroll_stops` crops from `build_samples`; default output dir is set in `ADSERP_CLICK_AOI_OUT`):
-
-```bash
 python preprocessing/adserp/build_click_aoi_dataset.py --split all
 ```
 
-Typical outputs:
-
-```
-datasets/RecGaze/
-├── init_interface_user_gaze(swipes).csv   # Step 2: filtered rows
-└── interface_iamge/                       # Step 3: PNGs (e.g. User_*_TaskID_*_final_interface.png)
-datasets/raw/RecGaze/                      # Raw CSVs + poster_cache for step 3
-
-datasets/Adserp/samples/
-├── full_page/samples.jsonl
-└── scroll_stops/samples.jsonl
-```
-
-
 ## 🔧 Training
 
-Training is implemented as scripts under `fixate/fixate_training/` with hyperparameters in `config/` (there is no top-level `train.py` CLI). Run commands from the **repository root** so imports like `config.*` resolve.
+Run from the **repo root**. Hyperparameters are in `config/common_config.py` and operator-specific files (`config/attnlrp_config.py`, `glimpse_config.py`, `rollout_config.py`, `attnlrp_config_adserp.py`). Put VLM weights under `llm_models/` (paths in `common_config.py`).
 
-### Prerequisites
+**RecGaze**
 
-- Download VLM weights and point to them in `config/common_config.py` (`QWEN3VL_MODEL_PATH`, `INTERNVL_MODEL_PATH`, defaulting to `llm_models/Qwen3-VL-4B-Instruct` and `llm_models/InternVL3_5-4B-Instruct`).
-- **RecGaze:** gaze CSV, posters, and metadata under `datasets/RecGaze/` (see `GAZE_DATA_CSV`, `POSTER_IMAGES_DIR`, `USER_FEATURES_CSV`, `ITEM_FEATURES_CSV` in `common_config.py`).
-- **AdSERP:** after preprocessing, ensure `samples.jsonl` and `images/` match `ADSERP_SAMPLES_JSONL` / `ADSERP_IMAGES_DIR` in `config/attnlrp_config_adserp.py` (default: `fixate/fixate_training/`).
+```bash
+python fixate/fixate_training/train_fixate_attnlrp.py      # AttnLRP
+python fixate/fixate_training/train_fixate_glimpse.py      # GLIMPSE
+python fixate/fixate_training/train_fixate_rollout.py      # Attention Rollout
+```
 
-### RecGaze
-
-| Probing operator | Script | Primary config |
-|------------------|--------|----------------|
-| AttnLRP | `python fixate/fixate_training/train_fixate_attnlrp.py` | `config/attnlrp_config.py` (default `MODEL_TYPE`: `internvl`) |
-| GLIMPSE | `python fixate/fixate_training/train_fixate_glimpse.py` | `config/glimpse_config.py` (default `internvl`) |
-| Attention Rollout | `python fixate/fixate_training/train_fixate_rollout.py` | `config/rollout_config.py` (default `qwen3vl`) |
-
-Shared training defaults (batch size, epochs, soft-prompt size, loss weights, splits) live in `config/common_config.py`; each operator file sets `MODEL_TYPE` / `MODEL_NAME` and operator-specific options (e.g. `RUN_GRID_SEARCH`, `PARAM_GRID`).
-
-### AdSERP (AttnLRP)
+**AdSERP**
 
 ```bash
 python fixate/fixate_training/train_fixate_attnlrp_adserp.py
 ```
 
-Use `config/attnlrp_config_adserp.py` for backbone, paths (`OUTPUT_DIR`, `CHECKPOINT_DIR`), SERP batching, and grid-search ranges.
-
-### Main configuration knobs (edit Python configs, not CLI flags)
-
-| Setting | Typical location | Role |
-|---------|------------------|------|
-| Backbone | `MODEL_TYPE` + `MODEL_NAME` in each `config/*_config.py` | `internvl` vs `qwen3vl` and checkpoint directory |
-| Basis & soft prompts | `NUM_BASIS`, `NUM_SOFT_TOKENS` in `common_config.py` | Factorized prompt size |
-| Attention alignment | `LAMBDA_ATTN_WEIGHT`, `POWER_GAMMA`, `BETA_REG` | Loss weights and weighted KL / regularization |
-| Optimization | `BATCH_SIZE`, `GRADIENT_ACCUMULATION_STEPS`, `NUM_EPOCHS_CV` / `NUM_EPOCHS_FINAL` | Throughput and training length |
-| CV / search | `RUN_GRID_SEARCH`, `PARAM_GRID`, `K_FOLDS`, `SEED` / `MULTI_SEEDS` | Hyperparameter search and reproducibility |
-
-Backbone choice is per config file: set `MODEL_TYPE` to `internvl` or `qwen3vl` and ensure `MODEL_NAME` points at the corresponding local folder.
+Edit `MODEL_TYPE` / `MODEL_NAME` and training knobs in the configs above; there is no `train.py` CLI.
 
 ## 📊 Evaluation
 
-### Run Evaluation
+Metrics are reported at the end of each training run (JSON under `outputs/` / `checkpoints/` per `config/`). We report attention alignment (e.g. KL / JS, cosine, click@gaze overlap) and prediction quality (accuracy, log-loss, AUC) where applicable.
 
-```bash
-python eval.py \
-    --dataset recgaze \
-    --data_dir data/processed/recgaze \
-    --backbone qwen3-vl-4b \
-    --backbone_path <PATH_TO_QWEN3_VL> \
-    --probing_operator attnlrp \
-    --checkpoint outputs/recgaze_qwen3vl_attnlrp/best.pt \
-    --output_dir results/recgaze_qwen3vl_attnlrp \
-    --num_runs 5
-```
-
-### Metrics
-
-We evaluate from two perspectives:
-
-**Attention Alignment Metrics:**
-- KL Divergence (↓), Jensen–Shannon Divergence (↓), Cosine Similarity (↑)
-- Clicked-Slot Hit@k (CSH@k), Top-Gaze Overlap@k (TGO@k)
-
-**Prediction-Level Metrics:**
-- Accuracy, LogLoss (↓), AUC
-
-### Cross-Domain Evaluation (AdSERP)
-
-```bash
-python eval.py \
-    --dataset adserp \
-    --data_dir data/processed/adserp \
-    --backbone qwen3-vl-4b \
-    --backbone_path <PATH_TO_QWEN3_VL> \
-    --probing_operator attnlrp \
-    --checkpoint outputs/adserp_qwen3vl_attnlrp/best.pt \
-    --output_dir results/adserp_qwen3vl_attnlrp
-```
-
-## 📁 Project Structure
+## 📁 Project Structure (high level)
 
 ```
-FixATE/
-├── assets/                     # Figures for README
-├── configs/                    # Experiment configs
-├── data/                       # Raw and processed data
-├── preprocess/
-│   ├── build_fixation.py       # Fixation data preprocessing
-│   └── render_interface.py     # Interface screenshot rendering
-├── src/
-│   ├── models/
-│   │   ├── fixate.py           # FixATE core module
-│   │   ├── prompt_basis.py     # Personalized prompt basis decomposition
-│   │   └── backbones/          # VLM backbone wrappers
-│   ├── probing/
-│   │   ├── attn_rollout.py     # Attention Rollout operator
-│   │   ├── glimpse.py          # GLIMPSE operator
-│   │   └── attnlrp.py          # AttnLRP operator
-│   ├── data/
-│   │   ├── dataset.py          # Dataset and dataloader
-│   │   └── collator.py         # Multimodal collator
-│   ├── losses.py               # Attention alignment & NTP losses
-│   └── metrics.py              # Evaluation metrics
-├── scripts/
-│   └── run_fixate.sh           # End-to-end run script
-├── train.py                    # Training entry point
-├── eval.py                     # Evaluation entry point
-├── requirements.txt
-├── LICENSE
-└── README.md
+├── config/                 # Training hyperparameters & paths
+├── datasets/               # RecGaze / AdSERP data
+├── fixate/                 # Core library + training scripts (fixate_training/)
+├── preprocessing/          # Dataset-specific preprocessing
+├── llm_models/             # Local VLM checkpoints (optional path)
+├── outputs/                # Metrics / logs
+└── requirements.txt
 ```
 
 ## 🙏 Acknowledgements
