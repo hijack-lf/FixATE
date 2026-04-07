@@ -107,7 +107,7 @@ High-level layout:
 └── requirements.txt
 ```
 
-## 🙏 Acknowledgements
+## 😄Acknowledgements
 
 - [RecGaze](https://github.com/santideleon/RecGaze_Dataset) for the eye-tracking dataset in carousel-based recommendation
 - [AdSERP](https://github.com/kayhan-latifzadeh/AdSERP) for the eye-tracking dataset in sponsored search
