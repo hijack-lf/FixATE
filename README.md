@@ -24,7 +24,7 @@ We propose **FixATE**, a framework that aligns a frozen VLM's visual attention w
 - [Evaluation](#evaluation)
 - [Project Structure](#project-structure)
 
-## 🔍 Overview
+<h2 id="overview">🔍 Overview</h2>
 
 Existing LLM-based user simulators perceive recommendations through text or structured metadata, missing the visual attention signals that drive real user behavior. **FixATE** bridges this gap by:
 
@@ -40,7 +40,7 @@ Existing LLM-based user simulators perceive recommendations through text or stru
   - [Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct)
   - [InternVL3.5-4B-Instruct](https://huggingface.co/OpenGVLab/InternVL3_5-4B-Instruct)
 
-## 📦 Data Preparation
+<h2 id="data-preparation">📦 Data Preparation</h2>
 
 Download [RecGaze](https://github.com/santideleon/RecGaze_Dataset) and [AdSERP](https://github.com/kayhan-latifzadeh/AdSERP) into `datasets/` (e.g. `RecGaze/`, `Adserp/`).
 
@@ -60,7 +60,7 @@ python preprocessing/adserp/build_samples.py --mode both --n 5
 python preprocessing/adserp/build_click_aoi_dataset.py --split all
 ```
 
-## 🔧 Training
+<h2 id="training">🔧 Training</h2>
 
 Run from the **repo root**. Hyperparameters are in `config/common_config.py` and operator-specific files (`config/attnlrp_config.py`, `glimpse_config.py`, `rollout_config.py`, `attnlrp_config_adserp.py`). Put VLM weights under `llm_models/` (paths in `common_config.py`).
 
@@ -78,7 +78,7 @@ python fixate/fixate_training/train_fixate_rollout.py      # Attention Rollout
 python fixate/fixate_training/train_fixate_attnlrp_adserp.py
 ```
 
-## 📊 Evaluation
+<h2 id="evaluation">📊 Evaluation</h2>
 
 Training scripts write per-run metrics to JSON under `outputs/` and `checkpoints/` (paths depend on `config/`). Below matches what `compute_sample_metrics` and the trainers aggregate (sample-level metrics are **micro-averaged** over the evaluation set, prefixed with `micro_` in logs).
 
@@ -94,7 +94,7 @@ Let **g** be the normalized human gaze (dwell) vector and **a** the normalized m
 | **Attention log-loss** (`attn_logloss`) | Negative log of *a* on the clicked slot (mass on the true choice) | Lower |
 | **Attention AUC** (`attn_auc`) | One-vs-rest style rank score: other slots vs. clicked slot under *a* | Higher |
 | **Click@k** (`click@1`, `click@3`, `click@5`) | Whether **choice** is in the top-*k* slots when ranked by model attention *a* | Higher |
-| **Gaze@k** (`gaze@1`, `gaze@3`, `gaze@5`,) | Overlap between top-*k* by *a* and top-*k* by *g* (implementation normalizes by *k* for *k*>1) | Higher |
+| **Gaze@k** (`gaze@1`, `gaze@3`, `gaze@5`) | Overlap between top-*k* by *a* and top-*k* by *g* (implementation normalizes by *k* for *k*>1) | Higher |
 
 AdSERP runs may log extra variants (e.g. **top-k JS** over visible AOIs) when slot sets are variable.
 
@@ -108,7 +108,7 @@ AdSERP runs may log extra variants (e.g. **top-k JS** over visible AOIs) when sl
 
 `config/common_config.py` defines a weighted **primary score** over several `micro_*` terms (e.g. cosine, click@k, gaze@k, answer accuracy) for model selection during CV; see `PRIMARY_METRIC_POSITIVE` and `compute_primary_score`.
 
-## 📁 Project Structure
+<h2 id="project-structure">📁 Project Structure</h2>
 
 High-level layout:
 
@@ -124,7 +124,7 @@ High-level layout:
 
 ## 🙏 Acknowledgements
 
-- [RecGaze](https://github.com/deleMartinez/RecGaze) for the eye-tracking dataset in carousel-based recommendation
-- [AdSERP](https://github.com/nicolo-mn/ad-serp) for the eye-tracking dataset in sponsored search
-- [Qwen3-VL](https://github.com/QwenLM/Qwen2.5-VL) and [InternVL](https://github.com/OpenGVLab/InternVL) for VLM backbones
-- [GLIMPSE](https://github.com/gxshen/GLIMPSE), [AttnLRP](https://github.com/rachtibat/LRP-eXplains-Transformers), and [Attention Rollout](https://github.com/samiraabnar/attention_flow) for interpretability operators
+- [RecGaze](https://github.com/santideleon/RecGaze_Dataset) for the eye-tracking dataset in carousel-based recommendation
+- [AdSERP](https://github.com/kayhan-latifzadeh/AdSERP) for the eye-tracking dataset in sponsored search
+- [Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct) and [InternVL3_5-4B-Instruct](https://huggingface.co/OpenGVLab/InternVL3_5-4B-Instruct) for VLM backbones
+- [GLIMPSE](https://arxiv.org/abs/2506.18985), [AttnLRP](https://dl.acm.org/doi/10.5555/3692070.3692076), and [Attention Rollout](https://aclanthology.org/2020.acl-main.385/) for interpretability operators
