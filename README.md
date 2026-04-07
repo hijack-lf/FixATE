@@ -1,10 +1,6 @@
 # 👁️ FixATE: Fixation-Aligned Tuning for Personalized User Emulation
-
-[![License](https://img.shields.io/github/license/FixATE/FixATE)](LICENSE)
-[![arXiv](https://img.shields.io/badge/arXiv-2506.XXXXX-orange)](https://arxiv.org/abs/2506.XXXXX)
-[![Dataset: RecGaze](https://img.shields.io/badge/Dataset-RecGaze-blue)](https://github.com/deleMartinez/RecGaze)
-[![Dataset: AdSERP](https://img.shields.io/badge/Dataset-AdSERP-blue)](https://github.com/nicolo-mn/ad-serp)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-green)](https://www.python.org/)
+[![Dataset: RecGaze](https://img.shields.io/badge/Dataset-RecGaze-blue)](https://github.com/santideleon/RecGaze_Dataset)
+[![Dataset: AdSERP](https://img.shields.io/badge/Dataset-AdSERP-blue)](https://github.com/kayhan-latifzadeh/AdSERP)
 
 ---
 
@@ -58,7 +54,7 @@ pip install -r requirements.txt
 - Transformers >= 4.40
 - Two supported VLM backbones:
   - [Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct)
-  - [InternVL3.5-4B-Instruct](https://huggingface.co/OpenGVLab/InternVL3-5-4B-Instruct)
+  - [InternVL3.5-4B-Instruct](https://huggingface.co/OpenGVLab/InternVL3_5-4B-Instruct)
 
 ## 📦 Data Preparation
 
@@ -68,8 +64,8 @@ We use two public eye-tracking datasets:
 
 | Dataset | Domain | Layout | Source |
 |---------|--------|--------|--------|
-| **RecGaze** | Movie recommendation | 3×5 carousel grid | [GitHub](https://github.com/deleMartinez/RecGaze) |
-| **AdSERP** | Sponsored search | Vertical SERP | [GitHub](https://github.com/nicolo-mn/ad-serp) |
+| **RecGaze** | Movie recommendation | 3×5 carousel grid | [GitHub](https://github.com/santideleon/RecGaze_Dataset) |
+| **AdSERP** | Sponsored search | Vertical SERP | [GitHub](https://github.com/kayhan-latifzadeh/AdSERP) |
 
 Download the datasets and place them under `data/`:
 
@@ -240,26 +236,6 @@ FixATE/
 ├── LICENSE
 └── README.md
 ```
-
-## 📝 Citation
-
-If you find this work useful in your research, please consider citing:
-
-```bibtex
-@inproceedings{fixate2026,
-  title     = {Through Their Eyes: Fixation-aligned Tuning for Personalized User Emulation},
-  author    = {Anonymous},
-  booktitle = {Proceedings of the 34th ACM International Conference on Multimedia (MM '26), Brave New Ideas Track},
-  year      = {2026},
-  publisher = {ACM},
-  address   = {New York, NY, USA},
-  doi       = {10.1145/XXXXXXX.XXXXXXX}
-}
-```
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgements
 
