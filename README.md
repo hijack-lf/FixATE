@@ -31,10 +31,6 @@ Existing LLM-based user simulators perceive recommendations through text or stru
 1. **Probing** the VLM's internal visual attention via interpretability operators (Attention Rollout, GLIMPSE, AttnLRP) to obtain slot-level relevance distributions comparable with human fixation.
 2. **Learning personalized soft prompts** through a factorized basis decomposition, steering the model's attention toward each user's characteristic fixation pattern.
 
-<p align="center">
-  <img src="asserts/motivation.png" width="70%" alt="Motivation: Perceptual gap between text-based and visual interfaces">
-</p>
-
 
 ### Dependencies
 
@@ -82,11 +78,35 @@ python fixate/fixate_training/train_fixate_rollout.py      # Attention Rollout
 python fixate/fixate_training/train_fixate_attnlrp_adserp.py
 ```
 
-Edit `MODEL_TYPE` / `MODEL_NAME` and training knobs in the configs above; there is no `train.py` CLI.
-
 ## 📊 Evaluation
 
-Metrics are reported at the end of each training run (JSON under `outputs/` / `checkpoints/` per `config/`). We report attention alignment (e.g. KL / JS, cosine, click@gaze overlap) and prediction quality (accuracy, log-loss, AUC) where applicable.
+Training scripts write per-run metrics to JSON under `outputs/` and `checkpoints/` (paths depend on `config/`). Below matches what `compute_sample_metrics` and the trainers aggregate (sample-level metrics are **micro-averaged** over the evaluation set, prefixed with `micro_` in logs).
+
+### Attention alignment (model attention vs. human gaze)
+
+Let **q** be the normalized gaze dwell vector and **p** the normalized model slot-attention vector on the same slots. **choice** is the ground-truth clicked slot index.
+
+| Metric | Meaning | Better |
+|--------|---------|--------|
+| **KL divergence** (`kl_div` / `micro_kl_div`) | KL(*q* ∥ *p*): how much human gaze *q* differs from model mass *p* | Lower |
+| **JS divergence** (`js_div` / `micro_js_div`) | Squared Jensen–Shannon distance between *q* and *p* | Lower |
+| **Cosine similarity** (`cosine_sim` / `micro_cosine_sim`) | Cosine similarity between vectors *p* and *q* | Higher |
+| **Attention log-loss** (`attn_logloss`) | Negative log of *p* on the clicked slot (mass on the true choice) | Lower |
+| **Attention AUC** (`attn_auc`) | One-vs-rest style rank score: other slots vs. clicked slot under *p* | Higher |
+| **Click@k** (`click@1`, `click@3`, `click@5`, …) | Whether **choice** is in the top-*k* slots when ranked by model attention *p* | Higher |
+| **Gaze@k** (`gaze@1`, `gaze@3`, `gaze@5`, …) | Overlap between top-*k* by *p* and top-*k* by *q* (implementation normalizes by *k* for *k*>1) | Higher |
+
+AdSERP runs may log extra variants (e.g. **top-k JS** over visible AOIs) when slot sets are variable.
+
+### Prediction quality (answer / choice)
+
+| Metric | Meaning | Better |
+|--------|---------|--------|
+| **Answer accuracy** (`answer_accuracy`) | Fraction of samples where the model’s generated choice (letter or index) matches the label | Higher |
+
+### Composite score (RecGaze-style selection)
+
+`config/common_config.py` defines a weighted **primary score** over several `micro_*` terms (e.g. cosine, click@k, gaze@k, answer accuracy) for model selection during CV; see `PRIMARY_METRIC_POSITIVE` and `compute_primary_score`.
 
 ## 📁 Project Structure (high level)
 
