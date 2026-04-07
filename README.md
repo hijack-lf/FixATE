@@ -83,8 +83,8 @@ Let **g** be the normalized human gaze (dwell) vector and **a** the normalized m
 | **Cosine similarity** (`cosine_sim` / `micro_cosine_sim`) | Cosine similarity between vectors *g* and *a* | Higher |
 | **Attention log-loss** (`attn_logloss`) | Negative log of *a* on the clicked slot (mass on the true choice) | Lower |
 | **Attention AUC** (`attn_auc`) | One-vs-rest style rank score: other slots vs. clicked slot under *a* | Higher |
-| **Click@k** (`click@1`, `click@3`, `click@5`) | Whether **choice** is in the top-*k* slots when ranked by model attention *a* | Higher |
-| **Gaze@k** (`gaze@1`, `gaze@3`, `gaze@5`) | Overlap between top-*k* by *a* and top-*k* by *g* (implementation normalizes by *k* for *k*>1) | Higher |
+| **CSH@k** (`CSH@1`, `CSH@3`, `CSH@5`) | Whether **choice** is in the top-*k* slots when ranked by model attention *a* | Higher |
+| **TGO@k** (`TGO@1`, `TGO@3`, `TGO@5`) | Overlap between top-*k* by *a* and top-*k* by *g* (implementation normalizes by *k* for *k*>1) | Higher |
 
 ### Prediction quality (answer / choice)
 

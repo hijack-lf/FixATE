@@ -1065,12 +1065,12 @@ def compute_sample_metrics(
                 np.append(p[np.argsort(q)[::-1][:min(3, n)]], max(1.0 - p[np.argsort(q)[::-1][:min(3, n)]].sum(), 0.0)),
             ) ** 2
         ) if n > 1 else 0.0,
-        "click@1": click1,
-        "click@3": click3,
-        "click@5": click5,
-        "gaze@1": gaze1,
-        "gaze@3": gaze3,
-        "gaze@5": gaze5,
+        "CSH@1": click1,
+        "CSH@3": click3,
+        "CSH@5": click5,
+        "TGO@1": gaze1,
+        "TGO@3": gaze3,
+        "TGO@5": gaze5,
         "recall@3": click3,
         "recall@5": click5,
     }

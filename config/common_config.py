@@ -68,8 +68,21 @@ UI_IMAGE_WIDTH, UI_IMAGE_HEIGHT = 1100, 600
 PRIMARY_LOWER_IS_BETTER = False
 # Default weights (methods may override)
 PRIMARY_METRIC_POSITIVE = {
-    "micro_cosine_sim": 0.10, "micro_click@1": 0.20,
-    "micro_click@3": 0.25, "micro_gaze@3": 0.20, "answer_accuracy": 0.25,
+    "micro_cosine_sim": 0.10, "micro_CSH@1": 0.20,
+    "micro_CSH@3": 0.25, "micro_TGO@3": 0.20, "answer_accuracy": 0.25,
+}
+
+# ═══════════════════════════════════════════════════════════════
+#  Shared grid-search defaults (train_fixate_attnlrp / glimpse / rollout)
+#  全量笛卡尔积：4×4×3×5×3×3 = 2160 组；可按需删减某一维以缩短搜索时间
+# ═══════════════════════════════════════════════════════════════
+RECRAZE_PARAM_GRID = {
+    "BASIS_LR": [2e-4, 5e-4, 1e-3, 2e-3],
+    "ALPHA_LR": [2e-3, 4e-3, 6e-3, 8e-3],
+    "BETA_REG": [3e-4, 1e-3, 3e-3],
+    "LAMBDA_ATTN_WEIGHT": [0.1, 0.2, 0.3, 0.4, 0.5],
+    "WEIGHT_DECAY": [0, 1e-4, 1e-3],
+    "POWER_GAMMA": [1.5, 2.0, 2.5],
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -113,10 +126,10 @@ def compute_sample_metrics(model_attn, gaze_dist, choice_0, logit_probs=None):
         "js_div": js, "kl_div": kl, "cosine_sim": cos,
         "attn_logloss": -float(np.log(pc)),
         "attn_auc": float((np.sum(neg<pp)+0.5*np.sum(neg==pp))/len(neg)),
-        "click@1": float(mr[0]==choice_0), "click@3": float(choice_0 in mr[:3]), "click@5": float(choice_0 in mr[:5]),
-        "gaze@1": float(len(set(mr[:1])&set(gr[:1]))),
-        "gaze@3": float(len(set(mr[:3])&set(gr[:3])))/3,
-        "gaze@5": float(len(set(mr[:5])&set(gr[:5])))/5,
+        "CSH@1": float(mr[0]==choice_0), "CSH@3": float(choice_0 in mr[:3]), "CSH@5": float(choice_0 in mr[:5]),
+        "TGO@1": float(len(set(mr[:1])&set(gr[:1]))),
+        "TGO@3": float(len(set(mr[:3])&set(gr[:3])))/3,
+        "TGO@5": float(len(set(mr[:5])&set(gr[:5])))/5,
     }
 
 

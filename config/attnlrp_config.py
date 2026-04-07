@@ -25,7 +25,6 @@ DEFAULT_HYPERPARAMS = {
     "NUM_BASIS": NUM_BASIS, "NUM_SOFT_TOKENS": NUM_SOFT_TOKENS,
     "BASIS_LR": 0.001, "ALPHA_LR": 0.001, "WEIGHT_DECAY": 0.001,
 }
-PARAM_GRID = {"BASIS_LR": [5e-4, 1e-3], "ALPHA_LR": [3e-3, 5e-3],
-              "BETA_REG": [5e-4, 1e-3], "LAMBDA_ATTN_WEIGHT": [0.2, 0.3, 0.5]}
+PARAM_GRID = dict(RECRAZE_PARAM_GRID)
 HP_TO_CFG = {"BETA_REG": "beta_reg", "LAMBDA_ATTN_WEIGHT": "lambda_attn_weight",
              "POWER_GAMMA": "power_gamma"}

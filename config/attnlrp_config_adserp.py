@@ -47,13 +47,14 @@ USE_RANDOM_SOFT_PROMPT = False
 ATTNLRP_CREATE_GRAPH = True
 ATTNLRP_GRAD_SCALE = 0.1
 
+# 全量笛卡尔积：5×4×4×3×2×3 = 720 组（与 RecGaze 共享网格量级）；可按需删减某一维
 PARAM_GRID = {
-    "lambda_attn_target": [0.3, 0.5],
-    "basis_lr": [5e-4, 1e-3],
-    "alpha_lr": [1e-3],
-    "weight_decay": [1e-3],
-    "beta_reg": [BETA_REG],
-    "power_gamma": [POWER_GAMMA],
+    "lambda_attn_target": [0.2, 0.3, 0.4, 0.5, 0.6],
+    "basis_lr": [1e-4, 3e-4, 5e-4, 1e-3],
+    "alpha_lr": [5e-4, 1e-3, 3e-3, 5e-3],
+    "weight_decay": [0, 1e-4, 1e-3],
+    "beta_reg": [BETA_REG, 2e-3],
+    "power_gamma": [1.5, 2.0, 2.5],
 }
 
 ADSERP_INSTRUCTION = (
