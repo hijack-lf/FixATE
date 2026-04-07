@@ -84,17 +84,17 @@ Training scripts write per-run metrics to JSON under `outputs/` and `checkpoints
 
 ### Attention alignment (model attention vs. human gaze)
 
-Let **q** be the normalized gaze dwell vector and **p** the normalized model slot-attention vector on the same slots. **choice** is the ground-truth clicked slot index.
+Let **g** be the normalized human gaze (dwell) vector and **a** the normalized model slot-attention vector on the same slots. **choice** is the ground-truth clicked slot index.
 
 | Metric | Meaning | Better |
 |--------|---------|--------|
-| **KL divergence** (`kl_div` / `micro_kl_div`) | KL(*q* ∥ *p*): how much human gaze *q* differs from model mass *p* | Lower |
-| **JS divergence** (`js_div` / `micro_js_div`) | Squared Jensen–Shannon distance between *q* and *p* | Lower |
-| **Cosine similarity** (`cosine_sim` / `micro_cosine_sim`) | Cosine similarity between vectors *p* and *q* | Higher |
-| **Attention log-loss** (`attn_logloss`) | Negative log of *p* on the clicked slot (mass on the true choice) | Lower |
-| **Attention AUC** (`attn_auc`) | One-vs-rest style rank score: other slots vs. clicked slot under *p* | Higher |
-| **Click@k** (`click@1`, `click@3`, `click@5`, …) | Whether **choice** is in the top-*k* slots when ranked by model attention *p* | Higher |
-| **Gaze@k** (`gaze@1`, `gaze@3`, `gaze@5`, …) | Overlap between top-*k* by *p* and top-*k* by *q* (implementation normalizes by *k* for *k*>1) | Higher |
+| **KL divergence** (`kl_div` / `micro_kl_div`) | KL(*g* ∥ *a*): how much human gaze *g* differs from model mass *a* | Lower |
+| **JS divergence** (`js_div` / `micro_js_div`) | Squared Jensen–Shannon distance between *g* and *a* | Lower |
+| **Cosine similarity** (`cosine_sim` / `micro_cosine_sim`) | Cosine similarity between vectors *g* and *a* | Higher |
+| **Attention log-loss** (`attn_logloss`) | Negative log of *a* on the clicked slot (mass on the true choice) | Lower |
+| **Attention AUC** (`attn_auc`) | One-vs-rest style rank score: other slots vs. clicked slot under *a* | Higher |
+| **Click@k** (`click@1`, `click@3`, `click@5`) | Whether **choice** is in the top-*k* slots when ranked by model attention *a* | Higher |
+| **Gaze@k** (`gaze@1`, `gaze@3`, `gaze@5`,) | Overlap between top-*k* by *a* and top-*k* by *g* (implementation normalizes by *k* for *k*>1) | Higher |
 
 AdSERP runs may log extra variants (e.g. **top-k JS** over visible AOIs) when slot sets are variable.
 
@@ -108,7 +108,9 @@ AdSERP runs may log extra variants (e.g. **top-k JS** over visible AOIs) when sl
 
 `config/common_config.py` defines a weighted **primary score** over several `micro_*` terms (e.g. cosine, click@k, gaze@k, answer accuracy) for model selection during CV; see `PRIMARY_METRIC_POSITIVE` and `compute_primary_score`.
 
-## 📁 Project Structure (high level)
+## 📁 Project Structure
+
+High-level layout:
 
 ```
 ├── config/                 # Training hyperparameters & paths
