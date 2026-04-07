@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 from collections import defaultdict
 from typing import Dict, Iterator, List, Optional, Tuple
 
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 RECGAZE_RAW = os.path.join(_REPO_ROOT, "datasets", "raw", "RecGaze")
 SUMMARY_FEEDBACK_CSV = os.path.join(RECGAZE_RAW, "summary_feedback.csv")
 ITEM_FEATURES_CSV = os.path.join(RECGAZE_RAW, "item_features.csv")

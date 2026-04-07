@@ -1,1 +1,1 @@
-
+Due to copyright restrictions, poster and interface images are not distributed with this repository. Please obtain the required assets yourself and place them in this directory.

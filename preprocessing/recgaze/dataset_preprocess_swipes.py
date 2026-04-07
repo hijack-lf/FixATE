@@ -11,7 +11,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _RECGAZE = os.path.join(_REPO_ROOT, "datasets", "RecGaze")
 DEFAULT_SUMMARY = os.path.join(_RECGAZE, "summary_feedback.csv")
 DEFAULT_OUT = os.path.join(_RECGAZE, "init_interface_user_gaze(swipes).csv")
