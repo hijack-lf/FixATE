@@ -86,17 +86,12 @@ Let **g** be the normalized human gaze (dwell) vector and **a** the normalized m
 | **Click@k** (`click@1`, `click@3`, `click@5`) | Whether **choice** is in the top-*k* slots when ranked by model attention *a* | Higher |
 | **Gaze@k** (`gaze@1`, `gaze@3`, `gaze@5`) | Overlap between top-*k* by *a* and top-*k* by *g* (implementation normalizes by *k* for *k*>1) | Higher |
 
-AdSERP runs may log extra variants (e.g. **top-k JS** over visible AOIs) when slot sets are variable.
-
 ### Prediction quality (answer / choice)
 
 | Metric | Meaning | Better |
 |--------|---------|--------|
 | **Answer accuracy** (`answer_accuracy`) | Fraction of samples where the model’s generated choice (letter or index) matches the label | Higher |
 
-### Composite score (RecGaze-style selection)
-
-`config/common_config.py` defines a weighted **primary score** over several `micro_*` terms (e.g. cosine, click@k, gaze@k, answer accuracy) for model selection during CV; see `PRIMARY_METRIC_POSITIVE` and `compute_primary_score`.
 
 <h2 id="project-structure">📁 Project Structure</h2>
 

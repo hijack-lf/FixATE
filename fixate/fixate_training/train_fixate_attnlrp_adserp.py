@@ -41,7 +41,9 @@ from config.common_config import (
     MULTI_SEEDS,
     NUM_BASIS,
     NUM_SOFT_TOKENS,
+    RUN_TIMESTAMP,
     SEED,
+    compute_primary_score,
 )
 from config.attnlrp_config_adserp import (
     ADSERP_IMAGES_DIR,
@@ -1203,8 +1205,76 @@ def _log_four_way_comparison(
     return
 
 
-def _log_multi_seed_summary(_logger: logging.Logger, _results: List[Dict[str, Any]]) -> None:
-    return
+def _aggregate_float_dicts(dicts: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Arithmetic mean over dicts for keys whose values are finite int/float."""
+    if not dicts:
+        return {}
+    all_keys: set = set()
+    for d in dicts:
+        all_keys.update(d.keys())
+    out: Dict[str, float] = {}
+    for k in sorted(all_keys):
+        vals = []
+        for d in dicts:
+            if k not in d:
+                continue
+            v = d[k]
+            if isinstance(v, (int, float)) and np.isfinite(v):
+                vals.append(float(v))
+        if vals:
+            out[k] = float(np.mean(vals))
+    return out
+
+
+def _log_multi_seed_summary(logger: logging.Logger, results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Average validation-style metrics across MULTI_SEEDS runs; save JSON and print summary."""
+    n = len(results)
+    if n == 0:
+        return {}
+
+    scores = [float(r["final_score"]) for r in results if np.isfinite(r.get("final_score", float("nan")))]
+    avg_final_score = float(np.mean(scores)) if scores else float("nan")
+
+    avg_final_metrics = _aggregate_float_dicts([r.get("final_metrics") or {} for r in results])
+    avg_bl_tf = _aggregate_float_dicts([r.get("bl_tf") or {} for r in results])
+    avg_bl_fg = _aggregate_float_dicts([r.get("bl_fg") or {} for r in results])
+    avg_tr_tf = _aggregate_float_dicts([r.get("tr_tf") or {} for r in results])
+    avg_tr_fg = _aggregate_float_dicts([r.get("tr_fg") or {} for r in results])
+
+    primary_tf, primary_tf_detail = compute_primary_score(avg_tr_tf)
+    primary_fg, primary_fg_detail = compute_primary_score(avg_tr_fg)
+
+    payload: Dict[str, Any] = {
+        "n_seeds": n,
+        "multi_seed_avg": {
+            "final_score_val_best_js": avg_final_score,
+            "final_metrics": avg_final_metrics,
+            "bl_tf": avg_bl_tf,
+            "bl_fg": avg_bl_fg,
+            "tr_tf": avg_tr_tf,
+            "tr_fg": avg_tr_fg,
+            "primary_score_tr_tf": primary_tf,
+            "primary_score_tr_tf_detail": primary_tf_detail,
+            "primary_score_tr_fg": primary_fg,
+            "primary_score_tr_fg_detail": primary_fg_detail,
+        },
+        "per_seed": results,
+    }
+
+    out_path = os.path.join(OUTPUT_DIR, f"adserp_attnlrp_multi_seed_{RUN_TIMESTAMP}.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+
+    msg = (
+        f"[AdSERP multi-seed] n={n} | avg final_score (best val JS): {avg_final_score:.6f} | "
+        f"primary tr_tf: {primary_tf:.6f} ({primary_tf_detail}) | "
+        f"primary tr_fg: {primary_fg:.6f} ({primary_fg_detail}) | "
+        f"wrote {out_path}"
+    )
+    logger.info(msg)
+    print(msg)
+
+    return payload
 
 
 
