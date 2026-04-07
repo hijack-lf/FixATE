@@ -72,24 +72,26 @@ python fixate/fixate_training/train_fixate_attnlrp_adserp.py
 
 Training scripts write per-run metrics to JSON under `outputs/` and `checkpoints/` (paths depend on `config/`). Below matches what `compute_sample_metrics` and the trainers aggregate (sample-level metrics are **micro-averaged** over the evaluation set, prefixed with `micro_` in logs).
 
-### Attention alignment (model attention vs. human gaze)
+### Attention alignment metrics
 
-Let **g** be the normalized human gaze (dwell) vector and **a** the normalized model slot-attention vector on the same slots. **choice** is the ground-truth clicked slot index.
+How well the normalized model slot-attention vector **a** matches the normalized human gaze (dwell) vector **g** on the same slots. **choice** is the ground-truth clicked slot index.
 
 | Metric | Meaning | Better |
 |--------|---------|--------|
 | **KL divergence** (`kl_div` / `micro_kl_div`) | KL(*g* ∥ *a*): how much human gaze *g* differs from model mass *a* | Lower |
 | **JS divergence** (`js_div` / `micro_js_div`) | Squared Jensen–Shannon distance between *g* and *a* | Lower |
 | **Cosine similarity** (`cosine_sim` / `micro_cosine_sim`) | Cosine similarity between vectors *g* and *a* | Higher |
-| **Attention log-loss** (`attn_logloss`) | Negative log of *a* on the clicked slot (mass on the true choice) | Lower |
-| **Attention AUC** (`attn_auc`) | One-vs-rest style rank score: other slots vs. clicked slot under *a* | Higher |
 | **CSH@k** (`CSH@1`, `CSH@3`, `CSH@5`) | Whether **choice** is in the top-*k* slots when ranked by model attention *a* | Higher |
 | **TGO@k** (`TGO@1`, `TGO@3`, `TGO@5`) | Overlap between top-*k* by *a* and top-*k* by *g* (implementation normalizes by *k* for *k*>1) | Higher |
 
-### Prediction quality (answer / choice)
+### Prediction-level metrics
+
+Metrics that depend on the ground-truth **choice** (clicked slot) and/or the model’s discrete prediction, not only distributional alignment between *g* and *a*.
 
 | Metric | Meaning | Better |
 |--------|---------|--------|
+| **Attention log-loss** (`attn_logloss`) | Negative log of *a* on the clicked slot (mass on the true choice) | Lower |
+| **Attention AUC** (`attn_auc`) | One-vs-rest style rank score: other slots vs. clicked slot under *a* | Higher |
 | **Answer accuracy** (`answer_accuracy`) | Fraction of samples where the model’s generated choice (letter or index) matches the label | Higher |
 
 
