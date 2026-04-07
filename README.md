@@ -90,9 +90,9 @@ Metrics that depend on the ground-truth **choice** (clicked slot) and/or the mod
 
 | Metric | Meaning | Better |
 |--------|---------|--------|
-| **Attention log-loss** (`attn_logloss`) | Negative log of *a* on the clicked slot (mass on the true choice) | Lower |
-| **Attention AUC** (`attn_auc`) | One-vs-rest style rank score: other slots vs. clicked slot under *a* | Higher |
-| **Answer accuracy** (`answer_accuracy`) | Fraction of samples where the model’s generated choice (letter or index) matches the label | Higher |
+| **Log-Loss** | Negative log of the softmax probability, over candidate answer tokens, assigned to the **true** slot (not mass from the saliency / attention map in RecGaze eval) | Lower |
+| **AUC** | One-vs-rest style rank score: other slots vs. **choice** under that same **logit-based** slot distribution | Higher |
+| **Answer Accuracy** | Fraction of samples where the model’s generated choice (letter or index) matches the label | Higher |
 
 
 <h2 id="project-structure">📁 Project Structure</h2>
