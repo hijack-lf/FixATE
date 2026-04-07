@@ -32,7 +32,7 @@ Existing LLM-based user simulators perceive recommendations through text or stru
 2. **Learning personalized soft prompts** through a factorized basis decomposition, steering the model's attention toward each user's characteristic fixation pattern.
 
 <p align="center">
-  <img src="assets/motivation.png" width="70%" alt="Motivation: Perceptual gap between text-based and visual interfaces">
+  <img src="asserts/motivation.png" width="70%" alt="Motivation: Perceptual gap between text-based and visual interfaces">
 </p>
 
 
