@@ -19,13 +19,10 @@ We propose **FixATE**, a framework that aligns a frozen VLM's visual attention w
 ## 📚 Contents
 
 - [Overview](#overview)
-- [Installation](#installation)
 - [Data Preparation](#data-preparation)
-- [Quick Start](#quick-start)
 - [Training](#training)
 - [Evaluation](#evaluation)
 - [Project Structure](#project-structure)
-- [Citation](#citation)
 
 ## 🔍 Overview
 
@@ -38,15 +35,6 @@ Existing LLM-based user simulators perceive recommendations through text or stru
   <img src="assets/motivation.png" width="70%" alt="Motivation: Perceptual gap between text-based and visual interfaces">
 </p>
 
-## 🚧 Installation
-
-```bash
-git clone https://github.com/FixATE/FixATE.git
-cd FixATE
-conda create -n fixate python=3.10 -y
-conda activate fixate
-pip install -r requirements.txt
-```
 
 ### Dependencies
 
@@ -70,99 +58,101 @@ We use two public eye-tracking datasets:
 Download the datasets and place them under `data/`:
 
 ```
-data/
+datasets/
 ├── recgaze/
-│   ├── fixation_data.csv
-│   ├── click_data.csv
-│   └── interface_screenshots/
 └── adserp/
-    ├── fixation_data.csv
-    ├── click_data.csv
-    └── interface_screenshots/
 ```
 
-### 2. Preprocess Fixation Data
+### 2. RecGaze: preprocess swipe / gaze trials
 
-Aggregate pixel-level fixation into slot-level dwell-time vectors:
+Filter `summary_feedback.csv` into a processed CSV (valid fixation rows, last click on Movie, etc.) for downstream use:
 
 ```bash
-python preprocess/build_fixation.py \
-    --dataset recgaze \
-    --data_dir data/recgaze \
-    --output_dir data/processed/recgaze
+python preprocessing/recgaze/dataset_preprocess_swipes.py \
+  --summary datasets/RecGaze/summary_feedback.csv \
+  --out "datasets/RecGaze/init_interface_user_gaze(swipes).csv"
 ```
 
-### 3. Generate Interface Screenshots
+Defaults use the same paths under `datasets/RecGaze/`; use `--task-min` / `--task-max` to change the TaskID range (default 1–35).
 
-Render recommendation interfaces as images for VLM input:
+### 3. RecGaze: generate interface images
+
+Place raw CSVs under `datasets/raw/RecGaze/` (`summary_feedback.csv`, `item_features.csv`; posters go to `poster_cache/` as needed). The script replays swipe events, updates carousel state, and renders one final PNG per user–task:
 
 ```bash
-python preprocess/render_interface.py \
-    --dataset recgaze \
-    --data_dir data/recgaze \
-    --output_dir data/processed/recgaze/screenshots
+python preprocessing/recgaze/generate_interface_iamge.py 1-35
+# 或：python preprocessing/recgaze/generate_interface_iamge.py all
 ```
 
-After preprocessing, you will get:
+For a single user–task pair, pass both `--only-user` and `--only-task`.
 
-```
-data/processed/recgaze/
-├── train.jsonl          # Training interactions
-├── test.jsonl           # Test interactions (leave-one-out)
-├── fixation_dist.json   # Per-session slot-level fixation distributions
-└── screenshots/         # Rendered interface images
-```
+### 4. AdSERP: build gaze samples (optional)
 
-## 🚀 Quick Start
-
-Run FixATE training and evaluation with default settings on RecGaze:
+Raw AdSERP data defaults to `datasets/Adserp/data` (override with `ADSERP_DATA_DIR`). Build full-page and/or scroll-stop samples:
 
 ```bash
-bash scripts/run_fixate.sh
+python preprocessing/adserp/build_samples.py --mode both --n 5
 ```
+
+Optional click-AOI viewport subset (expects `scroll_stops` crops from `build_samples`; default output dir is set in `ADSERP_CLICK_AOI_OUT`):
+
+```bash
+python preprocessing/adserp/build_click_aoi_dataset.py --split all
+```
+
+Typical outputs:
+
+```
+datasets/RecGaze/
+├── init_interface_user_gaze(swipes).csv   # Step 2: filtered rows
+└── interface_iamge/                       # Step 3: PNGs (e.g. User_*_TaskID_*_final_interface.png)
+datasets/raw/RecGaze/                      # Raw CSVs + poster_cache for step 3
+
+datasets/Adserp/samples/
+├── full_page/samples.jsonl
+└── scroll_stops/samples.jsonl
+```
+
 
 ## 🔧 Training
 
-### Train FixATE with Personalized Soft Prompts
+Training is implemented as scripts under `fixate/fixate_training/` with hyperparameters in `config/` (there is no top-level `train.py` CLI). Run commands from the **repository root** so imports like `config.*` resolve.
+
+### Prerequisites
+
+- Download VLM weights and point to them in `config/common_config.py` (`QWEN3VL_MODEL_PATH`, `INTERNVL_MODEL_PATH`, defaulting to `llm_models/Qwen3-VL-4B-Instruct` and `llm_models/InternVL3_5-4B-Instruct`).
+- **RecGaze:** gaze CSV, posters, and metadata under `datasets/RecGaze/` (see `GAZE_DATA_CSV`, `POSTER_IMAGES_DIR`, `USER_FEATURES_CSV`, `ITEM_FEATURES_CSV` in `common_config.py`).
+- **AdSERP:** after preprocessing, ensure `samples.jsonl` and `images/` match `ADSERP_SAMPLES_JSONL` / `ADSERP_IMAGES_DIR` in `config/attnlrp_config_adserp.py` (default: `fixate/fixate_training/`).
+
+### RecGaze
+
+| Probing operator | Script | Primary config |
+|------------------|--------|----------------|
+| AttnLRP | `python fixate/fixate_training/train_fixate_attnlrp.py` | `config/attnlrp_config.py` (default `MODEL_TYPE`: `internvl`) |
+| GLIMPSE | `python fixate/fixate_training/train_fixate_glimpse.py` | `config/glimpse_config.py` (default `internvl`) |
+| Attention Rollout | `python fixate/fixate_training/train_fixate_rollout.py` | `config/rollout_config.py` (default `qwen3vl`) |
+
+Shared training defaults (batch size, epochs, soft-prompt size, loss weights, splits) live in `config/common_config.py`; each operator file sets `MODEL_TYPE` / `MODEL_NAME` and operator-specific options (e.g. `RUN_GRID_SEARCH`, `PARAM_GRID`).
+
+### AdSERP (AttnLRP)
 
 ```bash
-python train.py \
-    --dataset recgaze \
-    --data_dir data/processed/recgaze \
-    --backbone qwen3-vl-4b \
-    --backbone_path <PATH_TO_QWEN3_VL> \
-    --probing_operator attnlrp \
-    --num_basis 8 \
-    --soft_prompt_length 16 \
-    --loss_weight_attn 1.0 \
-    --power_exponent 2.0 \
-    --batch_size 4 \
-    --grad_accum_steps 2 \
-    --epochs 30 \
-    --lr 1e-4 \
-    --output_dir outputs/recgaze_qwen3vl_attnlrp \
-    --seed 42
+python fixate/fixate_training/train_fixate_attnlrp_adserp.py
 ```
 
-#### Key Arguments
+Use `config/attnlrp_config_adserp.py` for backbone, paths (`OUTPUT_DIR`, `CHECKPOINT_DIR`), SERP batching, and grid-search ranges.
 
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `--backbone` | VLM backbone (`qwen3-vl-4b` / `internvl3.5-4b`) | `qwen3-vl-4b` |
-| `--probing_operator` | Interpretability operator (`attnlrp` / `glimpse` / `attn_rollout`) | `attnlrp` |
-| `--num_basis` | Number of prompt basis vectors *M* | `8` |
-| `--soft_prompt_length` | Tokens per basis prompt *N_soft* | `16` |
-| `--loss_weight_attn` | Weight λ for attention alignment loss | `1.0` |
-| `--power_exponent` | Power exponent γ for weighted KL divergence | `2.0` |
+### Main configuration knobs (edit Python configs, not CLI flags)
 
-#### Supported Configurations
+| Setting | Typical location | Role |
+|---------|------------------|------|
+| Backbone | `MODEL_TYPE` + `MODEL_NAME` in each `config/*_config.py` | `internvl` vs `qwen3vl` and checkpoint directory |
+| Basis & soft prompts | `NUM_BASIS`, `NUM_SOFT_TOKENS` in `common_config.py` | Factorized prompt size |
+| Attention alignment | `LAMBDA_ATTN_WEIGHT`, `POWER_GAMMA`, `BETA_REG` | Loss weights and weighted KL / regularization |
+| Optimization | `BATCH_SIZE`, `GRADIENT_ACCUMULATION_STEPS`, `NUM_EPOCHS_CV` / `NUM_EPOCHS_FINAL` | Throughput and training length |
+| CV / search | `RUN_GRID_SEARCH`, `PARAM_GRID`, `K_FOLDS`, `SEED` / `MULTI_SEEDS` | Hyperparameter search and reproducibility |
 
-FixATE is backbone- and operator-agnostic. All 6 combinations are supported:
-
-| | Attention Rollout | GLIMPSE | AttnLRP |
-|---|:---:|:---:|:---:|
-| **Qwen3-VL-4B** | ✅ | ✅ | ✅ |
-| **InternVL3.5-4B** | ✅ | ✅ | ✅ |
+Backbone choice is per config file: set `MODEL_TYPE` to `internvl` or `qwen3vl` and ensure `MODEL_NAME` points at the corresponding local folder.
 
 ## 📊 Evaluation
 
