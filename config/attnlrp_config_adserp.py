@@ -47,7 +47,7 @@ USE_RANDOM_SOFT_PROMPT = False
 ATTNLRP_CREATE_GRAPH = True
 ATTNLRP_GRAD_SCALE = 0.1
 
-# 全量笛卡尔积：5×4×4×3×2×3 = 720 组（与 RecGaze 共享网格量级）；可按需删减某一维
+# Full Cartesian product: 5×4×4×3×2×3 = 720 groups (same grid scale as RecGaze); trim any dimension as needed.
 PARAM_GRID = {
     "lambda_attn_target": [0.2, 0.3, 0.4, 0.5, 0.6],
     "basis_lr": [1e-4, 3e-4, 5e-4, 1e-3],

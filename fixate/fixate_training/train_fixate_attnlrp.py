@@ -139,7 +139,7 @@ class AttnLRPTrainer(AttnLRPAttentionMixin):
             lc = torch.zeros((), device=la_.device, dtype=la_.dtype)
         else:
             lc = loss_choice
-        # 与 train_att_attnlrp 一致使用 LM CE，但不乘 choice_loss_weight
+        # Use LM CE consistently with train_att_attnlrp, but do not multiply by choice_loss_weight.
         total = lc + lambda_attn_weight * la_ + br * lr
         return total, {k: float(v.detach().cpu()) for k, v in {
             "loss_choice": lc, "loss_attn": la_, "loss_reg": lr, "total_loss": total}.items()}

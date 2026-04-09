@@ -11,23 +11,18 @@ import random
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import pandas as pd
-
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent))
 from build_samples import (
     get_all_trial_ids,
-    load_trial_meta,
     load_fixations,
     load_mouse,
     get_scroll_timeline,
     get_scroll_at,
     get_click_event,
     detect_scroll_stops,
-    resolve_click_page_coords,
-    classify_click,
     SCALE,
     VIEWPORT_H,
     VIEWPORT_W,

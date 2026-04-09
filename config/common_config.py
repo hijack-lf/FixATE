@@ -74,7 +74,7 @@ PRIMARY_METRIC_POSITIVE = {
 
 # ═══════════════════════════════════════════════════════════════
 #  Shared grid-search defaults (train_fixate_attnlrp / glimpse / rollout)
-#  全量笛卡尔积：4×4×3×5×3×3 = 2160 组；可按需删减某一维以缩短搜索时间
+# Full Cartesian product: 4×4×3×5×3×3 = 2160 groups; trim any dimension as needed to shorten search time.
 # ═══════════════════════════════════════════════════════════════
 RECRAZE_PARAM_GRID = {
     "BASIS_LR": [2e-4, 5e-4, 1e-3, 2e-3],

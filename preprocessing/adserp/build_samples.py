@@ -14,7 +14,6 @@ import random
 import argparse
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 import numpy as np
