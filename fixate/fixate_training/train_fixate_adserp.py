@@ -1,21 +1,14 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""AdSERP SERP: AttnLRP training (variable-length AOIs, query-conditioned). Run from repo root."""
-
 import os
 import sys
-
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
 import json
+import time
 import math
+import copy
 import logging
-
-logging.disable(logging.CRITICAL)
-
+from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional, Any
 from collections import defaultdict
+from datetime import datetime, timezone, timedelta
 from itertools import product
 
 import random
@@ -27,50 +20,19 @@ from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 from scipy.spatial.distance import jensenshannon
 
-os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-
 from transformers import AutoProcessor, AutoModelForVision2Seq, AutoModel, AutoTokenizer
 import torchvision.transforms as T
 from torchvision.transforms.functional import InterpolationMode
 
-from config.common_config import (
-    DEVICE,
-    EVAL_EVERY_N_EPOCHS,
-    GAZE_TAU,
-    K_FOLDS,
-    MULTI_SEEDS,
-    NUM_BASIS,
-    NUM_SOFT_TOKENS,
-    RUN_TIMESTAMP,
-    SEED,
-    compute_primary_score,
-)
-from config.attnlrp_config_adserp import (
-    ADSERP_IMAGES_DIR,
-    ADSERP_INSTRUCTION,
-    ADSERP_SAMPLES_JSONL,
-    ATTNLRP_CREATE_GRAPH,
-    ATTNLRP_GRAD_SCALE,
-    BATCH_SIZE,
-    CHECKPOINT_DIR,
-    GRADIENT_ACCUMULATION_STEPS,
-    INTERNVL_MODEL_PATH,
-    MODEL_NAME,
-    MODEL_TYPE,
-    NUM_EPOCHS_CV,
-    NUM_EPOCHS_FINAL,
-    OUTPUT_DIR,
-    PARAM_GRID,
-    TrainerConfig,
-    USE_USER_ALPHA,
-    VIEWPORT_WIDTH,
-)
 
-INSTRUCTION = ADSERP_INSTRUCTION
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from config.adserp_config import *
 
 
 def infer_model_type_from_name(model_name: str) -> Optional[str]:
-    """Infer backbone type from checkpoint path or name."""
     name = (model_name or "").lower()
     if "internvl" in name:
         return "internvl"
@@ -78,14 +40,17 @@ def infer_model_type_from_name(model_name: str) -> Optional[str]:
         return "qwen3vl"
     return None
 
+
 def load_adserp_data(
     jsonl_path: str,
     images_dir: str,
     only_visible: bool = True,
+    logger: Optional[logging.Logger] = None,
+    signal: str = "fixation",
+    require_both_signals: bool = False,
 ) -> List[Dict]:
-    """Load AdSERP samples from JSONL. Each dict has sample_id, user_id, query, image_path,
-    aoi_bboxes (viewport coords), aoi_types, gaze_dwell_ms, clicked_aoi_idx, n_aois, viewport_size.
-    """
+    assert signal in ("fixation", "cursor"), f"bad signal={signal!r}"
+    aoi_dwell_field = "cursor_dwell_ms" if signal == "cursor" else "gaze_dwell_ms"
     samples = []
     n_total = 0
     n_no_click = 0
@@ -128,7 +93,7 @@ def load_adserp_data(
 
                 aoi_bboxes.append((bx1, by1, bx2, by2))
                 aoi_types.append(aoi["type"])
-                aoi_gaze.append(aoi["gaze_dwell_ms"])
+                aoi_gaze.append(aoi[aoi_dwell_field])
                 aoi_original_ids.append(aoi["aoi_id"])
 
             if len(aoi_bboxes) == 0:
@@ -138,6 +103,17 @@ def load_adserp_data(
             if gaze_arr.sum() <= 0:
                 n_no_gaze += 1
                 continue
+
+            if require_both_signals:
+                other_field = "gaze_dwell_ms" if signal == "cursor" else "cursor_dwell_ms"
+                other_sum = 0.0
+                kept_oids = set(aoi_original_ids)
+                for _a in raw["aois"]:
+                    if _a["aoi_id"] in kept_oids:
+                        other_sum += float(_a.get(other_field, 0.0))
+                if other_sum <= 0:
+                    n_no_gaze += 1
+                    continue
 
             clicked_orig_id = raw["clicked_aoi_id"]
             clicked_idx = None
@@ -168,6 +144,9 @@ def load_adserp_data(
                 "viewport_size": (VIEWPORT_WIDTH, vp_height),
             })
 
+    if logger:
+        n_aois_list = [s["n_aois"] for s in samples]
+
     return samples
 
 
@@ -176,7 +155,6 @@ def gaze_distribution_from_dwell(
     tau: float = GAZE_TAU,
     eps: float = 1e-8,
 ) -> np.ndarray:
-    """Convert per-AOI dwell times to a tempered probability vector."""
     t = dwell_ms.astype(np.float32)
     g = t / (t.sum() + eps)
     g = np.exp(np.log(g + eps) / tau)
@@ -184,9 +162,7 @@ def gaze_distribution_from_dwell(
     return g
 
 
-
 class AdSERPDataset(Dataset):
-    """AdSERP samples with variable-length AOIs."""
 
     def __init__(self, samples: List[Dict]):
         self.samples = samples
@@ -214,7 +190,6 @@ class AdSERPDataset(Dataset):
 
 
 def adserp_collate_fn(batch: List[Dict]) -> Dict:
-    """Collate without stacking variable-length fields."""
     return {
         "sample_id": [b["sample_id"] for b in batch],
         "user_id": [b["user_id"] for b in batch],
@@ -296,7 +271,6 @@ def _preprocess_image_for_internvl(image: Image.Image, input_size=448, max_num=4
     return pixel_values, num_patches, aspect_ratio
 
 
-
 class PromptBasisModule(nn.Module):
     def __init__(
         self,
@@ -344,9 +318,7 @@ class PromptBasisModule(nn.Module):
         return loss / len(user_ids)
 
 
-
 class AttnLRPTrainerAdSERP:
-    """AttnLRP trainer for AdSERP (variable AOIs, patch→bbox aggregation)."""
 
     def __init__(
         self,
@@ -390,6 +362,9 @@ class AttnLRPTrainerAdSERP:
             self.model.to(DEVICE)
 
         self.config = TrainerConfig()
+        if self.model_type == "internvl":
+            orig_layers = self.config.attnlrp_max_layers
+            self.config.attnlrp_max_layers = min(self.config.attnlrp_max_layers, INTERNVL_ATTNLRP_MAX_LAYERS)
 
         self.model.eval()
         for p in self.model.parameters():
@@ -456,7 +431,6 @@ class AttnLRPTrainerAdSERP:
         return visual_indices
 
     def attnlrp_layer_relevance(self, attn_l: torch.Tensor, grad_l: torch.Tensor) -> torch.Tensor:
-        """AttnLRP per-layer relevance (Prop 3.3 gradient approximation)."""
         AW = attn_l * grad_l
         denom = AW.sum(dim=-1, keepdim=True)
         denom_stable = denom + self.eps * denom.sign()
@@ -470,7 +444,6 @@ class AttnLRPTrainerAdSERP:
         return E
 
     def attnlrp_propagation(self, E_list: List[torch.Tensor]) -> torch.Tensor:
-        """Stack layer relevances with depth-weighted sum."""
         L = len(E_list)
         N = E_list[0].shape[0]
 
@@ -499,6 +472,72 @@ class AttnLRPTrainerAdSERP:
         R = R + torch.eye(N, device=device, dtype=dtype)
         return R
 
+    def _op_glimpse_layer_relevance(self, attn_l: torch.Tensor, grad_l: torch.Tensor) -> torch.Tensor:
+        G = torch.relu(grad_l * attn_l)
+        g_pos = torch.relu(grad_l)
+        num = G.sum(dim=(1, 2))
+        den = g_pos.sum(dim=(1, 2))
+        score = num / (den + self.eps)
+        w = torch.softmax(score / GLIMPSE_HEAD_TEMP, dim=0)
+        E = torch.zeros(G.shape[1], G.shape[2], device=G.device, dtype=G.dtype)
+        for h in range(G.shape[0]):
+            E = E + w[h] * G[h]
+        E = E / (E.sum(dim=-1, keepdim=True) + self.eps)
+        return E
+
+    def _op_glimpse_propagation(self, E_list, grad_list) -> torch.Tensor:
+        L = len(E_list)
+        N = E_list[0].shape[0]
+        g_layers = []
+        for g in grad_list:
+            g_sum = g.sum(dim=0)
+            g_l = torch.sum(torch.abs(g_sum))
+            g_layers.append(g_l)
+        g_layers = torch.stack(g_layers)
+        depth_logits = GLIMPSE_DEPTH_TEMP * torch.arange(1, L + 1, device=g_layers.device, dtype=g_layers.dtype)
+        s = torch.softmax(depth_logits, dim=0)
+        alpha_raw = g_layers * s
+        alpha = alpha_raw / (alpha_raw.sum() + self.eps)
+        dtype = E_list[0].dtype
+        I = torch.eye(N, device=E_list[0].device, dtype=dtype)
+        R = I.clone()
+        for l in range(L):
+            R = R + (alpha[l] * E_list[l]) @ R
+        return R
+
+    def _op_rollout_R(self, attentions, sample_idx: int = 0) -> torch.Tensor:
+        L_all = len(attentions)
+        m = self.config.attnlrp_max_layers
+        if m is not None and int(m) < L_all:
+            attn_used = attentions[L_all - int(m):]
+        else:
+            attn_used = attentions
+        R = None
+        for layer_attn in attn_used:
+            attn_avg = layer_attn[sample_idx].mean(dim=0).to(torch.float32)
+            if ROLLOUT_DISCARD_RATIO > 0.0:
+                flat = attn_avg.reshape(-1)
+                threshold = flat.quantile(ROLLOUT_DISCARD_RATIO)
+                attn_avg = torch.where(attn_avg < threshold, torch.zeros_like(attn_avg), attn_avg)
+            I = torch.eye(attn_avg.shape[0], device=attn_avg.device, dtype=attn_avg.dtype)
+            attn_hat = 0.5 * attn_avg + 0.5 * I
+            attn_hat = attn_hat / (attn_hat.sum(dim=-1, keepdim=True) + 1e-12)
+            R = attn_hat if R is None else attn_hat @ R
+        assert R is not None, "rollout: empty attentions"
+        return R
+
+    def _op_layer_relevance(self, A_l: torch.Tensor, g_l: torch.Tensor) -> torch.Tensor:
+        if ATTN_METHOD == "glimpse":
+            return self._op_glimpse_layer_relevance(A_l, g_l)
+        return self.attnlrp_layer_relevance(A_l, g_l)
+
+    def _op_compute_R(self, E_list, grad_list, attentions, sample_idx: int = 0) -> torch.Tensor:
+        if ATTN_METHOD == "rollout":
+            return self._op_rollout_R(attentions, sample_idx)
+        if ATTN_METHOD == "glimpse":
+            return self._op_glimpse_propagation(E_list, grad_list)
+        return self.attnlrp_propagation(E_list)
+
     def aggregate_patch_saliency_to_aois_torch(
         self,
         patch_saliency: torch.Tensor,
@@ -506,7 +545,6 @@ class AttnLRPTrainerAdSERP:
         patch_grid_size: Tuple[int, int],
         aoi_bboxes: List[Tuple[int, int, int, int]],
     ) -> torch.Tensor:
-        """Map patch saliency to variable-length AOI boxes; normalize to a distribution."""
         device = patch_saliency.device
         dtype = patch_saliency.dtype
         H_p, W_p = patch_grid_size
@@ -539,7 +577,7 @@ class AttnLRPTrainerAdSERP:
         jj = torch.arange(W_p, device=device)
         grid_i, grid_j = torch.meshgrid(ii, jj, indexing="ij")
 
-        cx = (grid_j.to(torch.float32) + 0.5) * patch_w  # (H_p, W_p)
+        cx = (grid_j.to(torch.float32) + 0.5) * patch_w
         cy = (grid_i.to(torch.float32) + 0.5) * patch_h
 
         cx_flat = cx.reshape(-1)
@@ -815,27 +853,61 @@ class AttnLRPTrainerAdSERP:
         lambda_attn: float,
         beta_reg: float,
         loss_choice: Optional[torch.Tensor] = None,
+        choice_weight: float = 1.0,
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
-        """CE (choice) + weighted KL to gaze + alpha L2. Choice enters with coefficient 1 (no extra weight)."""
         g = gaze_dist.unsqueeze(0)
         a = model_attention.unsqueeze(0)
+
+        mode = self.config.attn_loss_mode
         eps = self.eps
-        gamma = self.config.power_gamma
-        eps_pw = self.config.power_eps
-        raw_w = (g + eps_pw).pow(gamma)
-        weights = raw_w / raw_w.sum(dim=1, keepdim=True)
-        kl_per = g * (torch.log(g + eps) - torch.log(a + eps))
-        loss_attn = (weights * kl_per).sum(dim=1).mean()
+
+        if mode == "plain_kl":
+            loss_attn = (g * (torch.log(g + eps) - torch.log(a + eps))).sum(dim=1).mean()
+        elif mode == "weighted_full_kl":
+            gamma = self.config.power_gamma
+            eps_pw = self.config.power_eps
+            raw_w = (g + eps_pw).pow(gamma)
+            weights = raw_w / raw_w.sum(dim=1, keepdim=True)
+            kl_per = g * (torch.log(g + eps) - torch.log(a + eps))
+            loss_attn = (weights * kl_per).sum(dim=1).mean()
+        elif mode == "coarsened_kl":
+            k = min(self.config.topk_k, g.shape[1] - 1)
+            gamma = self.config.power_gamma
+            eps_pw = self.config.power_eps
+            _, topk_idx = g.topk(k, dim=1)
+            tk_g_vals = torch.gather(g, 1, topk_idx)
+            tk_a_vals = torch.gather(a, 1, topk_idx)
+            tail_g = (1.0 - tk_g_vals.sum(dim=1, keepdim=True)).clamp(min=0)
+            tail_a = (1.0 - tk_a_vals.sum(dim=1, keepdim=True)).clamp(min=0)
+            tk_g = torch.cat([tk_g_vals, tail_g], dim=1)
+            tk_a = torch.cat([tk_a_vals, tail_a], dim=1)
+            raw_w = (tk_g + eps_pw).pow(gamma)
+            weights = raw_w / raw_w.sum(dim=1, keepdim=True)
+            kl_per = tk_g * (torch.log(tk_g + eps) - torch.log(tk_a + eps))
+            loss_attn = (weights * kl_per).sum(dim=1).mean()
+        else:
+            raise ValueError(f"Unknown ATTN_LOSS_MODE: {mode!r}")
+
         loss_reg = self.prompt_basis.get_user_alpha_l2_loss(user_ids)
-        lc = loss_choice if loss_choice is not None else torch.zeros((), device=a.device, dtype=a.dtype)
-        total_loss = lc + lambda_attn * loss_attn + beta_reg * loss_reg
+
+        loss_choice_val = loss_choice if loss_choice is not None else torch.zeros((), device=a.device)
+
+        total_loss = choice_weight * loss_choice_val + lambda_attn * loss_attn + beta_reg * loss_reg
+
         loss_dict = {
-            "loss_choice": float(lc.detach().float().cpu().item()),
+            "loss_choice": float(loss_choice_val.detach().cpu().item()),
             "loss_attn": float(loss_attn.detach().cpu().item()),
             "loss_reg": float(loss_reg.detach().cpu().item()),
             "total_loss": float(total_loss.detach().cpu().item()),
         }
         return total_loss, loss_dict
+
+    def get_lambda_attn(self, step: int) -> float:
+        warmup = self.config.lambda_warmup_steps
+        target = self.config.lambda_attn_target
+        if step < warmup:
+            return 0.0
+        return min(target, (step - warmup) / warmup * target)
 
     def train_step(
         self,
@@ -890,7 +962,7 @@ class AttnLRPTrainerAdSERP:
                 attentions = outputs.attentions
 
                 choice_loss = None
-                if self.config.train_choice and getattr(outputs, "loss", None) is not None:
+                if self.config.train_choice:
                     choice_loss = outputs.loss
 
                 ans_pos = meta["answer_pos_combined"]
@@ -914,8 +986,8 @@ class AttnLRPTrainerAdSERP:
                     else:
                         src_pos = src_positions[-1]
 
-                # AttnLRP backward
                 E_list = []
+                grad_list = []
                 L = len(attentions)
                 max_l = self.config.attnlrp_max_layers
                 if max_l is not None and int(max_l) < L:
@@ -930,7 +1002,7 @@ class AttnLRPTrainerAdSERP:
                         valid_layers.append(l)
                         valid_attns.append(attn)
 
-                if len(valid_attns) > 0:
+                if ATTN_METHOD != "rollout" and len(valid_attns) > 0:
                     all_grads = torch.autograd.grad(
                         outputs=target_scalar, inputs=valid_attns,
                         retain_graph=True,
@@ -944,14 +1016,15 @@ class AttnLRPTrainerAdSERP:
                         g_l = g_attn[0]
                         if self.config.attnlrp_grad_scale != 1.0:
                             g_l = g_l * self.config.attnlrp_grad_scale
-                        E_l = self.attnlrp_layer_relevance(A_l, g_l)
+                        E_l = self._op_layer_relevance(A_l, g_l)
                         E_list.append(E_l)
+                        grad_list.append(g_l)
 
-                if len(E_list) == 0:
+                if _op_no_relevance(E_list, attentions):
                     uniform = torch.ones(n_aois, device=soft_prompt.device, dtype=soft_prompt.dtype) / n_aois
                     model_attention = soft_prompt.sum() * 0.0 + uniform
                 else:
-                    R = self.attnlrp_propagation(E_list)
+                    R = self._op_compute_R(E_list, grad_list, attentions, 0)
                     src_pos = max(0, min(int(src_pos), R.shape[0] - 1))
                     relevance = R[src_pos, :]
 
@@ -979,7 +1052,8 @@ class AttnLRPTrainerAdSERP:
                             aoi_bboxes=aoi_bboxes,
                         )
 
-            lambda_attn = self.config.lambda_attn_target
+            lambda_attn = self.get_lambda_attn(self.global_step) if self.config.train_choice \
+                else self.config.lambda_attn_target
 
             sample_loss, loss_dict = self.compute_losses(
                 model_attention=model_attention,
@@ -988,6 +1062,7 @@ class AttnLRPTrainerAdSERP:
                 lambda_attn=lambda_attn,
                 beta_reg=self.config.beta_reg,
                 loss_choice=choice_loss,
+                choice_weight=self.config.choice_loss_weight,
             )
             all_loss_dicts.append(loss_dict)
             scaled_sample_loss = sample_loss / batch_size / accumulation_steps
@@ -998,6 +1073,13 @@ class AttnLRPTrainerAdSERP:
                 torch.cuda.empty_cache()
 
         if do_optimizer_step:
+            basis_params = [self.prompt_basis.basis] if self.prompt_basis.basis.grad is not None else []
+            alpha_params = ([p for _, p in self.prompt_basis.user_alphas.items() if p.grad is not None]
+                           if self.config.use_user_alpha else [])
+            if basis_params:
+                torch.nn.utils.clip_grad_norm_(basis_params, max_norm=self.config.basis_clip_grad_norm)
+            if alpha_params:
+                torch.nn.utils.clip_grad_norm_(alpha_params, max_norm=self.config.alpha_clip_grad_norm)
             optimizer.step()
             self.global_step += 1
 
@@ -1017,13 +1099,11 @@ class AttnLRPTrainerAdSERP:
         self.global_step = checkpoint.get('global_step', 0)
 
 
-
 def compute_sample_metrics(
     model_attn: np.ndarray,
     gaze_dist: np.ndarray,
     clicked_idx: int,
 ) -> Dict[str, float]:
-    """Per-sample alignment metrics for variable-length AOIs."""
     eps = 1e-8
     n = len(model_attn)
 
@@ -1065,15 +1145,21 @@ def compute_sample_metrics(
                 np.append(p[np.argsort(q)[::-1][:min(3, n)]], max(1.0 - p[np.argsort(q)[::-1][:min(3, n)]].sum(), 0.0)),
             ) ** 2
         ) if n > 1 else 0.0,
-        "CSH@1": click1,
-        "CSH@3": click3,
-        "CSH@5": click5,
-        "TGO@1": gaze1,
-        "TGO@3": gaze3,
-        "TGO@5": gaze5,
+        "click@1": click1,
+        "click@3": click3,
+        "click@5": click5,
+        "gaze@1": gaze1,
+        "gaze@3": gaze3,
+        "gaze@5": gaze5,
         "recall@3": click3,
         "recall@5": click5,
     }
+
+
+def _op_no_relevance(E_list, attentions) -> bool:
+    if ATTN_METHOD == "rollout":
+        return attentions is None or len(attentions) == 0
+    return len(E_list) == 0
 
 
 def evaluate_on_samples(
@@ -1081,9 +1167,10 @@ def evaluate_on_samples(
     samples: List[Dict],
     logger: Optional[logging.Logger] = None,
     free_generation: bool = False,
+    per_sample_save_path: Optional[str] = None,
 ) -> Dict[str, float]:
-    """Evaluate on a sample list (teacher forcing or free generation + AttnLRP)."""
     all_metrics = []
+    per_sample_keys: List[Dict] = []
 
     n_correct = 0
     for idx, s in enumerate(samples):
@@ -1127,11 +1214,12 @@ def evaluate_on_samples(
                 src_pos = logits.shape[1] - 1
 
             E_list = []
+            grad_list = []
             L = len(attentions)
             max_l = trainer.config.attnlrp_max_layers
             layer_ids = list(range(max(0, L - int(max_l)), L)) if max_l and int(max_l) < L else list(range(L))
 
-            for l in layer_ids:
+            for l in (layer_ids if ATTN_METHOD != "rollout" else []):
                 attn = attentions[l]
                 if not torch.is_tensor(attn) or not attn.requires_grad:
                     continue
@@ -1141,13 +1229,14 @@ def evaluate_on_samples(
                 )[0]
                 if g_attn is None:
                     continue
-                E_l = trainer.attnlrp_layer_relevance(attn[0].float(), g_attn[0].float())
+                E_l = trainer._op_layer_relevance(attn[0].float(), g_attn[0].float())
                 E_list.append(E_l)
+                grad_list.append(g_attn[0].float())
 
-        if len(E_list) == 0:
+        if _op_no_relevance(E_list, attentions):
             model_attn = np.ones(n_aois, dtype=np.float32) / n_aois
         else:
-            R = trainer.attnlrp_propagation(E_list)
+            R = trainer._op_compute_R(E_list, grad_list, attentions, 0)
             src_pos = max(0, min(src_pos, R.shape[0] - 1))
             relevance = R[src_pos, :]
 
@@ -1171,8 +1260,9 @@ def evaluate_on_samples(
                     patch_grid_size=patch_grid_size,
                     aoi_bboxes=aoi_bboxes,
                 ).detach().float().cpu().numpy()
-                s = float(model_attn_t.sum())
-                model_attn = model_attn_t / s if s > 1e-9 else np.ones(n_aois, dtype=np.float32) / n_aois
+                _attn_sum = float(model_attn_t.sum())
+                model_attn = (model_attn_t / _attn_sum if _attn_sum > 1e-9
+                              else np.ones(n_aois, dtype=np.float32) / n_aois)
 
         del outputs, logits, attentions, inputs, meta, E_list, soft_prompt
         if torch.cuda.is_available():
@@ -1180,9 +1270,13 @@ def evaluate_on_samples(
 
         m = compute_sample_metrics(model_attn, gaze_dist, clicked_idx)
         all_metrics.append(m)
+        per_sample_keys.append({"sample_id": s.get("sample_id"),
+                                "user_id": s.get("user_id"),
+                                "clicked_aoi_idx": int(clicked_idx)})
         pred_idx = int(np.argmax(model_attn))
         if pred_idx == int(clicked_idx):
             n_correct += 1
+
 
     if not all_metrics:
         return {}
@@ -1192,98 +1286,94 @@ def evaluate_on_samples(
         vals = [m[k] for m in all_metrics if np.isfinite(m[k])]
         avg[f"micro_{k}"] = float(np.mean(vals)) if vals else float("nan")
     avg["answer_accuracy"] = float(n_correct / max(1, len(samples)))
+
+    if per_sample_save_path:
+        os.makedirs(os.path.dirname(per_sample_save_path), exist_ok=True)
+        records = [{**k, **m} for k, m in zip(per_sample_keys, all_metrics)]
+        with open(per_sample_save_path, "w", encoding="utf-8") as _f:
+            json.dump(records, _f, ensure_ascii=False)
     return avg
 
 
+def _fmt_delta(tr: float, bl: float, lower_better: bool) -> str:
+    d = tr - bl
+    if lower_better:
+        improve = -d
+    else:
+        improve = d
+    pct = (improve / (abs(bl) + 1e-12)) * 100.0
+    sign = "+" if d >= 0 else ""
+    return f"{sign}{d:.4f} ({pct:+.2f}%)"
+
+
 def _log_four_way_comparison(
-    _logger: logging.Logger,
-    _bl_tf: Dict[str, float],
-    _bl_fg: Dict[str, float],
-    _tr_tf: Dict[str, float],
-    _tr_fg: Dict[str, float],
+    logger: logging.Logger,
+    bl_tf: Dict[str, float],
+    bl_fg: Dict[str, float],
+    tr_tf: Dict[str, float],
+    tr_fg: Dict[str, float],
 ) -> None:
-    return
+    metrics_order = [
+        ("micro_attn_auc", False),
+        ("micro_attn_logloss", True),
+        ("micro_click@1", False),
+        ("micro_click@3", False),
+        ("micro_click@5", False),
+        ("micro_cosine_sim", False),
+        ("micro_gaze@1", False),
+        ("micro_gaze@3", False),
+        ("micro_gaze@5", False),
+        ("micro_js_div", True),
+        ("micro_kl_div", True),
+        ("micro_topk_js_div", True),
+        ("answer_accuracy", False),
+        ("micro_recall@3", False),
+        ("micro_recall@5", False),
+    ]
+
+    for k, lower_better in metrics_order:
+        btf = bl_tf.get(k, float("nan"))
+        bfg = bl_fg.get(k, float("nan"))
+        ttf = tr_tf.get(k, float("nan"))
+        tfg = tr_fg.get(k, float("nan"))
+        d_tf = _fmt_delta(ttf, btf, lower_better) if np.isfinite(btf) and np.isfinite(ttf) else "N/A"
+        d_fg = _fmt_delta(tfg, bfg, lower_better) if np.isfinite(bfg) and np.isfinite(tfg) else "N/A"
 
 
-def _aggregate_float_dicts(dicts: List[Dict[str, Any]]) -> Dict[str, float]:
-    """Arithmetic mean over dicts for keys whose values are finite int/float."""
-    if not dicts:
-        return {}
-    all_keys: set = set()
-    for d in dicts:
-        all_keys.update(d.keys())
-    out: Dict[str, float] = {}
-    for k in sorted(all_keys):
-        vals = []
-        for d in dicts:
-            if k not in d:
-                continue
-            v = d[k]
-            if isinstance(v, (int, float)) and np.isfinite(v):
-                vals.append(float(v))
-        if vals:
-            out[k] = float(np.mean(vals))
-    return out
+def _log_multi_seed_summary(
+    logger: logging.Logger,
+    results: List[Dict[str, Any]],
+) -> None:
+    if not results:
+        return
+    for r in results:
+        sid = r["seed"]
+        fs = r["final_score"]
+        fm = r.get("final_metrics") or {}
+        tr_tf = r.get("tr_tf") or {}
+        js_tf = tr_tf.get("micro_js_div", float("nan"))
+        if fm:
+            parts = [f"{k}={fm[k]:.4f}" for k in sorted(fm.keys())]
 
+    for r in results:
+        tr_tf = r.get("tr_tf") or {}
+        js_tf = tr_tf.get("micro_js_div", float("nan"))
 
-def _log_multi_seed_summary(logger: logging.Logger, results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Average validation-style metrics across MULTI_SEEDS runs; save JSON and print summary."""
-    n = len(results)
-    if n == 0:
-        return {}
-
-    scores = [float(r["final_score"]) for r in results if np.isfinite(r.get("final_score", float("nan")))]
-    avg_final_score = float(np.mean(scores)) if scores else float("nan")
-
-    avg_final_metrics = _aggregate_float_dicts([r.get("final_metrics") or {} for r in results])
-    avg_bl_tf = _aggregate_float_dicts([r.get("bl_tf") or {} for r in results])
-    avg_bl_fg = _aggregate_float_dicts([r.get("bl_fg") or {} for r in results])
-    avg_tr_tf = _aggregate_float_dicts([r.get("tr_tf") or {} for r in results])
-    avg_tr_fg = _aggregate_float_dicts([r.get("tr_fg") or {} for r in results])
-
-    primary_tf, primary_tf_detail = compute_primary_score(avg_tr_tf)
-    primary_fg, primary_fg_detail = compute_primary_score(avg_tr_fg)
-
-    payload: Dict[str, Any] = {
-        "n_seeds": n,
-        "multi_seed_avg": {
-            "final_score_val_best_js": avg_final_score,
-            "final_metrics": avg_final_metrics,
-            "bl_tf": avg_bl_tf,
-            "bl_fg": avg_bl_fg,
-            "tr_tf": avg_tr_tf,
-            "tr_fg": avg_tr_fg,
-            "primary_score_tr_tf": primary_tf,
-            "primary_score_tr_tf_detail": primary_tf_detail,
-            "primary_score_tr_fg": primary_fg,
-            "primary_score_tr_fg_detail": primary_fg_detail,
-        },
-        "per_seed": results,
-    }
-
-    out_path = os.path.join(OUTPUT_DIR, f"adserp_attnlrp_multi_seed_{RUN_TIMESTAMP}.json")
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
-
-    msg = (
-        f"[AdSERP multi-seed] n={n} | avg final_score (best val JS): {avg_final_score:.6f} | "
-        f"primary tr_tf: {primary_tf:.6f} ({primary_tf_detail}) | "
-        f"primary tr_fg: {primary_fg:.6f} ({primary_fg_detail}) | "
-        f"wrote {out_path}"
-    )
-    logger.info(msg)
-    print(msg)
-
-    return payload
-
+    for r in results:
+        _log_four_way_comparison(
+            logger,
+            r["bl_tf"],
+            r["bl_fg"],
+            r["tr_tf"],
+            r["tr_fg"],
+        )
 
 
 def split_train_test(
     samples: List[Dict],
-    test_ratio: float = 0.15,
+    test_ratio: float = ADSERP_TEST_RATIO,
     seed: int = 42,
 ) -> Tuple[List[int], List[int]]:
-    """Per-user holdout: one test sample per user when n>=2; singleton users stay in train."""
     rng = np.random.RandomState(seed)
     by_user = defaultdict(list)
     for i, s in enumerate(samples):
@@ -1295,15 +1385,42 @@ def split_train_test(
         rng.shuffle(arr)
         if len(arr) == 1:
             train_idx.append(int(arr[0]))
-        else:
-            test_idx.append(int(arr[0]))
-            train_idx.extend([int(x) for x in arr[1:]])
+            continue
+        k = max(1, int(round(test_ratio * len(arr))))
+        k = min(k, len(arr) - 1)
+        test_idx.extend(int(x) for x in arr[:k])
+        train_idx.extend(int(x) for x in arr[k:])
 
     return train_idx, test_idx
 
 
+def split_train_val(
+    samples: List[Dict],
+    train_indices: List[int],
+    val_ratio: float = ADSERP_VAL_RATIO,
+    seed: int = 42,
+) -> Tuple[List[int], List[int]]:
+    rng = np.random.RandomState(seed + 1000)
+    by_user = defaultdict(list)
+    for i in train_indices:
+        by_user[samples[i]["user_id"]].append(i)
+
+    tr_idx, val_idx = [], []
+    for uid, idxs in by_user.items():
+        arr = np.array(idxs)
+        rng.shuffle(arr)
+        if len(arr) == 1:
+            tr_idx.append(int(arr[0]))
+            continue
+        k = max(1, int(round(val_ratio * len(arr))))
+        k = min(k, len(arr) - 1)
+        val_idx.extend(int(x) for x in arr[:k])
+        tr_idx.extend(int(x) for x in arr[k:])
+
+    return tr_idx, val_idx
+
+
 def build_kfold_indices(train_indices: List[int], k_folds: int, seed: int) -> List[Tuple[List[int], List[int]]]:
-    """K-fold split over train indices; returns list of (train_idx, val_idx)."""
     rng = np.random.RandomState(seed)
     idx = np.array(train_indices, dtype=np.int64)
     rng.shuffle(idx)
@@ -1322,21 +1439,22 @@ def build_kfold_indices(train_indices: List[int], k_folds: int, seed: int) -> Li
 
 
 def apply_hyperparams_to_trainer(trainer: "AttnLRPTrainerAdSERP", hp: Dict[str, Any]) -> None:
-    """Apply grid-search hyperparameters to trainer.config."""
     cfg = trainer.config
+    cfg.attn_loss_mode = hp.get("attn_loss_mode", cfg.attn_loss_mode)
     cfg.lambda_attn_target = hp.get("lambda_attn_target", cfg.lambda_attn_target)
+    cfg.choice_loss_weight = hp.get("choice_loss_weight", cfg.choice_loss_weight)
+    cfg.attnlrp_max_layers = hp.get("attnlrp_max_layers", cfg.attnlrp_max_layers)
     cfg.beta_reg = hp.get("beta_reg", cfg.beta_reg)
+    cfg.topk_k = hp.get("topk_k", cfg.topk_k)
     cfg.power_gamma = hp.get("power_gamma", cfg.power_gamma)
 
 
-
-def setup_logger(log_name: str = "adserp_attnlrp") -> logging.Logger:
-    lg = logging.getLogger(log_name)
-    lg.handlers.clear()
-    lg.addHandler(logging.NullHandler())
-    lg.propagate = False
-    return lg
-
+def setup_logger(log_name: str = 'adserp_attnlrp') -> logging.Logger:
+    logger = logging.getLogger(log_name)
+    logger.handlers.clear()
+    logger.addHandler(logging.NullHandler())
+    logger.propagate = False
+    return logger
 
 
 def train_epoch(
@@ -1359,6 +1477,10 @@ def train_epoch(
         )
         for k, v in loss_dict.items():
             epoch_losses[k].append(v)
+
+        if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == n_batches:
+            avg_total = np.mean(epoch_losses["total_loss"][-10:])
+            avg_attn = np.mean(epoch_losses["loss_attn"][-10:])
 
     return {k: float(np.mean(v)) for k, v in epoch_losses.items()}
 
@@ -1400,9 +1522,11 @@ def run_training(
 
     best_score = float("inf")
     best_epoch = -1
+    best_state = None
     best_metrics = {}
 
     for epoch in range(1, num_epochs + 1):
+
         if USE_USER_ALPHA:
             new_params = []
             for uid in set(s["user_id"] for s in train_samples):
@@ -1417,16 +1541,21 @@ def run_training(
             if new_params:
                 optimizer.add_param_group({"params": new_params, "lr": alpha_lr, "weight_decay": 0})
 
-        train_epoch(trainer, train_loader, optimizer, epoch, logger)
+        epoch_losses = train_epoch(trainer, train_loader, optimizer, epoch, logger)
 
         if epoch % EVAL_EVERY_N_EPOCHS == 0 or epoch == num_epochs:
-            eval_metrics = evaluate_on_samples(trainer, eval_samples, logger)
+            eval_metrics = evaluate_on_samples(trainer, eval_samples, logger, free_generation=USE_FG_FOR_BEST_EPOCH)
 
-            js = eval_metrics.get("micro_js_div", float("inf"))
-            if js < best_score:
-                best_score = js
+            if USE_FG_FOR_BEST_EPOCH:
+                score = -float(eval_metrics.get("answer_accuracy", 0.0))
+            else:
+                score = float(eval_metrics.get("micro_js_div", float("inf")))
+            if score < best_score:
+                best_score = score
                 best_epoch = epoch
                 best_metrics = dict(eval_metrics)
+                best_state = {k: v.detach().cpu().clone()
+                              for k, v in trainer.prompt_basis.state_dict().items()}
                 if save_best:
                     ckpt_path = os.path.join(CHECKPOINT_DIR, f"best_epoch{epoch}.pt")
                     trainer.save_checkpoint(ckpt_path)
@@ -1434,6 +1563,8 @@ def run_training(
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+    if best_state is not None:
+        trainer.prompt_basis.load_state_dict(best_state, strict=False)
     return best_score, best_metrics
 
 
@@ -1443,7 +1574,6 @@ def grid_search_cv(
     logger: logging.Logger,
     cv_fold_seed: int = SEED,
 ) -> Dict[str, Any]:
-    """K-fold CV on train indices; select hyperparams by mean val micro_js_div (lower is better)."""
     keys = sorted(PARAM_GRID.keys())
     combos = [dict(zip(keys, vals)) for vals in product(*[PARAM_GRID[k] for k in keys])]
     folds = build_kfold_indices(train_idx, K_FOLDS, cv_fold_seed)
@@ -1451,7 +1581,7 @@ def grid_search_cv(
     best_hp = None
     best_score = float("inf")
 
-    for hp in combos:
+    for ci, hp in enumerate(combos, start=1):
         fold_scores = []
         for fi, (tr_idx, va_idx) in enumerate(folds, start=1):
             fold_train = [all_samples[i] for i in tr_idx]
@@ -1479,23 +1609,36 @@ def grid_search_cv(
     return best_hp if best_hp is not None else {}
 
 
-
 def main():
+    total_start = time.time()
     logger = setup_logger()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
-    seed_list = list(MULTI_SEEDS)
+    seed_list = list(MULTI_SEEDS) if USE_MULTI_SEED else [SEED]
 
-    samples = load_adserp_data(ADSERP_SAMPLES_JSONL, ADSERP_IMAGES_DIR)
+
+    samples = load_adserp_data(ADSERP_SAMPLES_JSONL, ADSERP_IMAGES_DIR,
+                               logger=logger, signal=SLOT_KL_SIGNAL,
+                               require_both_signals=SIGNAL_INTERSECT)
+
+    by_user = defaultdict(int)
+    for s in samples:
+        by_user[s["user_id"]] += 1
+
+    click_types = defaultdict(int)
+    for s in samples:
+        for t in s["aoi_types"]:
+            click_types[t] += 1
 
     selected_hp_shared: Dict[str, Any] = {}
     multi_seed_final = len(seed_list) > 1
 
     all_seed_results: List[Dict[str, Any]] = []
 
-    for run_seed in seed_list:
+    for run_i, run_seed in enumerate(seed_list, start=1):
+
         random.seed(run_seed)
         np.random.seed(run_seed)
         torch.manual_seed(run_seed)
@@ -1503,42 +1646,75 @@ def main():
             torch.cuda.manual_seed_all(run_seed)
 
         train_idx, test_idx = split_train_test(samples, seed=run_seed)
+        train_idx, val_idx = split_train_val(samples, train_idx, seed=run_seed)
         train_samples = [samples[i] for i in train_idx]
+        val_samples = [samples[i] for i in val_idx]
         test_samples = [samples[i] for i in test_idx]
 
-        if not selected_hp_shared:
-            selected_hp_shared = grid_search_cv(
-                samples, train_idx, logger, cv_fold_seed=run_seed
-            )
-        selected_hp = dict(selected_hp_shared)
+        selected_hp: Dict[str, Any] = {}
+        if RUN_GRID_SEARCH:
+            if not selected_hp_shared:
+                selected_hp_shared = grid_search_cv(
+                    samples, train_idx, logger, cv_fold_seed=run_seed
+                )
+            selected_hp = dict(selected_hp_shared)
+        else:
+            selected_hp = {}
 
         trainer = AttnLRPTrainerAdSERP(model_name=MODEL_NAME, model_type=MODEL_TYPE, logger=logger)
 
-        final_score, final_metrics = run_training(
-            trainer=trainer,
-            train_samples=train_samples,
-            eval_samples=test_samples,
-            num_epochs=NUM_EPOCHS_FINAL,
-            logger=logger,
-            hyperparams=selected_hp,
-            save_best=True,
-            eval_name="test",
-        )
-        apply_hyperparams_to_trainer(trainer, selected_hp)
-        tr_tf = evaluate_on_samples(trainer, test_samples, logger, free_generation=False)
-        tr_fg = evaluate_on_samples(trainer, test_samples, logger, free_generation=True)
+
+        if EVAL_ONLY:
+            import glob as _glob
+            _ck_src = EVAL_CKPT_DIR if EVAL_CKPT_DIR else CHECKPOINT_DIR
+            _cands = _glob.glob(os.path.join(_ck_src, "best_epoch*.pt"))
+            if not _cands:
+                raise FileNotFoundError(f"[EVAL_ONLY] no best_epoch*.pt in {_ck_src}")
+            _best_ck = max(_cands, key=lambda p: int(os.path.basename(p)[len("best_epoch"):-3]))
+            trainer.load_checkpoint(_best_ck)
+            final_score, final_metrics = float("nan"), {}
+        else:
+            final_score, final_metrics = run_training(
+                trainer=trainer,
+                train_samples=train_samples,
+                eval_samples=val_samples,
+                num_epochs=NUM_EPOCHS_FINAL,
+                logger=logger,
+                hyperparams=selected_hp,
+                save_best=True,
+                eval_name="val",
+            )
+
+        apply_hyperparams_to_trainer(trainer, selected_hp if selected_hp else {})
+        _ps_dir = os.path.join(OUTPUT_DIR, "per_sample")
+        _tr_tf_path = os.path.join(_ps_dir, f"per_sample_tr_tf_{RUN_TIMESTAMP}_seed{run_seed}.json")
+        _bl_tf_path = os.path.join(_ps_dir, f"per_sample_bl_tf_{RUN_TIMESTAMP}_seed{run_seed}.json")
+        _tr_fg_path = os.path.join(_ps_dir, f"per_sample_tr_fg_{RUN_TIMESTAMP}_seed{run_seed}.json")
+        _bl_fg_path = os.path.join(_ps_dir, f"per_sample_bl_fg_{RUN_TIMESTAMP}_seed{run_seed}.json")
+        tr_tf = ({} if EVAL_ONLY else
+                 evaluate_on_samples(trainer, test_samples, logger, free_generation=False,
+                                     per_sample_save_path=_tr_tf_path))
+        tr_fg = evaluate_on_samples(trainer, test_samples, logger, free_generation=True,
+                                    per_sample_save_path=_tr_fg_path)
 
         if torch.cuda.is_available():
             trainer.model.to("cpu")
             torch.cuda.empty_cache()
 
         baseline_trainer = AttnLRPTrainerAdSERP(model_name=MODEL_NAME, model_type=MODEL_TYPE, logger=logger)
-        apply_hyperparams_to_trainer(baseline_trainer, selected_hp)
-        bl_tf = evaluate_on_samples(baseline_trainer, test_samples, logger, free_generation=False)
-        bl_fg = evaluate_on_samples(baseline_trainer, test_samples, logger, free_generation=True)
+        if selected_hp:
+            apply_hyperparams_to_trainer(baseline_trainer, selected_hp)
+        bl_tf = ({} if EVAL_ONLY else
+                 evaluate_on_samples(baseline_trainer, test_samples, logger, free_generation=False,
+                                     per_sample_save_path=_bl_tf_path))
+        bl_fg = evaluate_on_samples(baseline_trainer, test_samples, logger, free_generation=True,
+                                    per_sample_save_path=_bl_fg_path)
 
         if not multi_seed_final:
-            _log_four_way_comparison(logger, bl_tf, bl_fg, tr_tf, tr_fg)
+            if EVAL_ONLY:
+                pass
+            else:
+                _log_four_way_comparison(logger, bl_tf, bl_fg, tr_tf, tr_fg)
 
         all_seed_results.append(
             {
@@ -1558,6 +1734,8 @@ def main():
 
     if multi_seed_final:
         _log_multi_seed_summary(logger, all_seed_results)
+
+    elapsed = time.time() - total_start
 
 
 if __name__ == "__main__":

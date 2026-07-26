@@ -1,16 +1,18 @@
 # 👁️ FixATE: Fixation-Aligned Tuning for Personalized User Emulation
+
 [![Dataset: RecGaze](https://img.shields.io/badge/Dataset-RecGaze-blue)](https://github.com/santideleon/RecGaze_Dataset)
 [![Dataset: AdSERP](https://img.shields.io/badge/Dataset-AdSERP-blue)](https://github.com/kayhan-latifzadeh/AdSERP)
 
----
+Code for **"Through Their Eyes: Fixation-aligned Tuning for Personalized User Emulation"**.
 
-We propose **FixATE**, a framework that aligns a frozen VLM's visual attention with each user's characteristic gaze pattern through interpretability-based probing and personalized soft prompt tuning, enabling more faithful user simulation in visual recommendation scenarios.
+**FixATE** aligns a frozen VLM's visual attention with each user's characteristic gaze pattern through interpretability-based probing and personalized soft prompt tuning, enabling more faithful user simulation in visual interfaces. We evaluate on two eye-tracking datasets covering two structurally distinct scenarios: carousel-based movie recommendation (**RecGaze**) and sponsored search (**AdSERP**). Beyond eye tracking, FixATE also supports **cursor dwell** as a low-cost supervision signal that approaches fixation-level performance without specialized hardware.
 
 ## 📚 Contents
 
 - [Overview](#overview)
 - [Data Preparation](#data-preparation)
 - [Training](#training)
+- [Reproducing Ablations & Sensitivity](#ablations)
 - [Evaluation](#evaluation)
 - [Project Structure](#project-structure)
 
@@ -20,96 +22,119 @@ Existing LLM-based user simulators perceive recommendations through text or stru
 
 1. **Probing** the VLM's internal visual attention via interpretability operators (Attention Rollout, GLIMPSE, AttnLRP) to obtain slot-level relevance distributions comparable with human fixation.
 2. **Learning personalized soft prompts** through a factorized basis decomposition, steering the model's attention toward each user's characteristic fixation pattern.
-
+3. **Supporting low-cost supervision**: cursor dwell time can replace eye-tracking fixation as the alignment target, trading a modest performance gap for far cheaper data collection.
 
 ### Dependencies
 
 - PyTorch >= 2.1
-- Transformers >= 4.40
-- Two supported VLM backbones:
+- Transformers (a version supporting Qwen3-VL and InternVL3.5)
+- Two supported VLM backbones, downloaded into `llm_models/`:
   - [Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct)
   - [InternVL3.5-4B-Instruct](https://huggingface.co/OpenGVLab/InternVL3_5-4B-Instruct)
 
 <h2 id="data-preparation">📦 Data Preparation</h2>
 
-Download [RecGaze](https://github.com/santideleon/RecGaze_Dataset) and [AdSERP](https://github.com/kayhan-latifzadeh/AdSERP) into `datasets/` (e.g. `RecGaze/`, `Adserp/`).
+Download [RecGaze](https://github.com/santideleon/RecGaze_Dataset) and [AdSERP](https://github.com/kayhan-latifzadeh/AdSERP) and place them under `datasets/` (`RecGaze/`, `Adserp/`).
 
-**RecGaze**
+**RecGaze** (2,701 click sessions from 87 users; content-disjoint task-level holdout: 1,921 train / 311 val / 469 test)
+
+Place the raw RecGaze files under `datasets/RecGaze/raw/` (`summary_feedback.csv`, `non_public_feedback_dataset.csv`, `aoi_data.csv`, `item_features.csv`, `user_features.csv`). Then run, from the repo root:
 
 ```bash
-python preprocessing/recgaze/dataset_preprocess_swipes.py
-python preprocessing/recgaze/generate_interface_iamge.py 1-35
+python preprocessing/recgaze/build_gaze_tables.py   # raw logs -> page-divided fixation & cursor tables
+python preprocessing/recgaze/render_images.py       # 1920x1080 page renders + letter-labeled (A-O) variants
+python preprocessing/recgaze/build_dataset.py       # action manifests -> stage2 -> fixate_dataset.jsonl
 ```
 
-Raw inputs for the second step: `datasets/raw/RecGaze/` (`summary_feedback.csv`, `item_features.csv`, `poster_cache/`). Outputs: `datasets/RecGaze/init_interface_user_gaze(swipes).csv` and `datasets/RecGaze/interface_iamge/*.png`.
+All intermediates stay under `datasets/RecGaze/`. The training entry consumes `datasets/RecGaze/fixate_dataset.jsonl` and the letter-labeled renders in `datasets/RecGaze/page_divide_real/image_index/`. The final build applies the fixed content-disjoint task split (seed 42), attaches slot-level cursor dwell, and self-checks the cursor mapping against the stored fixation vectors.
 
-**AdSERP (optional)**
+**AdSERP** (2,568 sessions; per-user query-disjoint split: 1,740 train / 309 val / 519 test)
 
 ```bash
 python preprocessing/adserp/build_samples.py --mode both --n 5
 python preprocessing/adserp/build_click_aoi_dataset.py --split all
 ```
 
+Place the resulting `samples.jsonl` and `images/` under `datasets/Adserp/`. Each AOI record carries both `gaze_dwell_ms` and `cursor_dwell_ms`.
+
 <h2 id="training">🔧 Training</h2>
 
-Run from the **repo root**. Hyperparameters are in `config/common_config.py` and operator-specific files (`config/attnlrp_config.py`, `glimpse_config.py`, `rollout_config.py`, `attnlrp_config_adserp.py`). Put VLM weights under `llm_models/` (paths in `common_config.py`).
-
-**RecGaze**
+Run from the **repo root**. All switches and hyperparameters live in `config/recgaze_config.py` and `config/adserp_config.py`; the defaults reproduce the main results in the paper.
 
 ```bash
-python fixate/fixate_training/train_fixate_attnlrp.py      # AttnLRP
-python fixate/fixate_training/train_fixate_glimpse.py      # GLIMPSE
-python fixate/fixate_training/train_fixate_rollout.py      # Attention Rollout
+python fixate/fixate_training/train_fixate_recgaze.py   # RecGaze
+python fixate/fixate_training/train_fixate_adserp.py    # AdSERP
 ```
 
-**AdSERP**
+Key switches (edit the corresponding config file):
 
-```bash
-python fixate/fixate_training/train_fixate_attnlrp_adserp.py
-```
+| Config entry | Values | Meaning |
+|---|---|---|
+| `ATTN_METHOD` | `attnlrp` / `glimpse` / `rollout` | probing operator |
+| `MODEL_TYPE` | `qwen3vl` / `internvl` | VLM backbone |
+| `SLOT_KL_SIGNAL` | `fixation` / `cursor` | supervision signal for the alignment loss |
+| `SIGNAL_INTERSECT` | `True` / `False` | restrict to sessions with both signals (dual-signal subset: 1,830 / 298 / 448) |
+
+Both trainers train only the soft-prompt parameters (basis + per-user coefficients) with the backbone frozen, average results over 5 seeds, and report the four-way comparison (Backbone / FixATE × teacher-forcing / free-generation) with per-user paired Wilcoxon tests.
+
+<h2 id="ablations">🧪 Reproducing Ablations & Sensitivity</h2>
+
+Each ablation variant in the paper corresponds to one config change:
+
+| Paper variant | Config change |
+|---|---|
+| Rand. SP | `USE_RANDOM_SOFT_PROMPT = True` |
+| z_u = 1 (no personalization) | `USE_USER_ALPHA = False` |
+| w/o ω_n (no importance weights) | `POWER_GAMMA = 0` |
+| w/o L_Attn | `LAMBDA_ATTN_TARGET = 0` |
+| w/o L_NTP | `TRAIN_CHOICE = False` |
+| Cursor supervision (§4.6) | `SLOT_KL_SIGNAL = "cursor"`, `SIGNAL_INTERSECT = True` |
+
+Sensitivity sweeps (§4.4) vary `NUM_BASIS` (M), `NUM_SOFT_TOKENS` (N_soft), and `LAMBDA_ATTN_TARGET` (λ) in the same config files.
 
 <h2 id="evaluation">📊 Evaluation</h2>
 
-Training scripts write per-run metrics to JSON under `outputs/` and `checkpoints/` (paths depend on `config/`). Below matches what `compute_sample_metrics` and the trainers aggregate (sample-level metrics are **micro-averaged** over the evaluation set, prefixed with `micro_` in logs).
+Training scripts write per-run metrics to JSON under `outputs/` and checkpoints under `checkpoints/`. Sample-level metrics are micro-averaged over the evaluation set (prefixed `micro_` in logs).
 
 ### Attention alignment metrics
 
-How well the normalized model slot-attention vector **a** matches the normalized human gaze (dwell) vector **g** on the same slots. **choice** is the ground-truth clicked slot index.
+How well the normalized model slot-attention vector **a** matches the normalized human dwell vector **g** on the same slots. **choice** is the ground-truth clicked slot index.
 
 | Metric | Meaning | Better |
 |--------|---------|--------|
-| **KL divergence** (`kl_div` / `micro_kl_div`) | KL(*g* ∥ *a*): how much human gaze *g* differs from model mass *a* | Lower |
-| **JS divergence** (`js_div` / `micro_js_div`) | Squared Jensen–Shannon distance between *g* and *a* | Lower |
-| **Cosine similarity** (`cosine_sim` / `micro_cosine_sim`) | Cosine similarity between vectors *g* and *a* | Higher |
-| **CSH@k** (`CSH@1`, `CSH@3`, `CSH@5`) | Whether **choice** is in the top-*k* slots when ranked by model attention *a* | Higher |
-| **TGO@k** (`TGO@1`, `TGO@3`, `TGO@5`) | Overlap between top-*k* by *a* and top-*k* by *g* (implementation normalizes by *k* for *k*>1) | Higher |
+| **KL divergence** | KL(*g* ∥ *a*) | Lower |
+| **JS divergence** | Squared Jensen–Shannon distance between *g* and *a* | Lower |
+| **Cosine similarity** | Cosine similarity between *g* and *a* | Higher |
+| **CSH@k** | Whether **choice** is in the top-*k* slots ranked by *a* | Higher |
+| **TGO@k** | Overlap between top-*k* by *a* and top-*k* by *g* (normalized by *k*) | Higher |
 
 ### Prediction-level metrics
 
-Metrics that depend on the ground-truth **choice** (clicked slot) and/or the model’s discrete prediction, not only distributional alignment between *g* and *a*.
-
 | Metric | Meaning | Better |
 |--------|---------|--------|
-| **Log-Loss** | Negative log of the softmax probability, over candidate answer tokens, assigned to the **true** slot (not mass from the saliency / attention map in RecGaze eval) | Lower |
-| **AUC** | One-vs-rest style rank score: other slots vs. **choice** under that same **logit-based** slot distribution | Higher |
-| **Answer Accuracy** | Fraction of samples where the model’s generated choice (letter or index) matches the label | Higher |
-
+| **Log-Loss** | Negative log-probability assigned to the true slot over candidate answer tokens | Lower |
+| **AUC** | One-vs-rest rank score of **choice** under the logit-based slot distribution | Higher |
+| **Answer Accuracy** | Fraction of samples where the generated choice matches the label | Higher |
 
 <h2 id="project-structure">📁 Project Structure</h2>
 
-High-level layout:
-
 ```
-├── config/                 # Training hyperparameters & paths
-├── datasets/               # RecGaze / AdSERP data
-├── fixate/                 # Core library + training scripts (fixate_training/)
-├── preprocessing/          # Dataset-specific preprocessing
-├── llm_models/             # Local VLM checkpoints (optional path)
-├── outputs/                # Metrics / logs
+├── config/
+│   ├── recgaze_config.py       # RecGaze paths, switches, hyperparameters
+│   └── adserp_config.py        # AdSERP paths, switches, hyperparameters
+├── datasets/                   # RecGaze / AdSERP data (downloaded & built locally)
+├── fixate/fixate_training/
+│   ├── train_fixate_recgaze.py # RecGaze trainer (all 3 operators x 2 backbones)
+│   └── train_fixate_adserp.py  # AdSERP trainer (all 3 operators x 2 backbones)
+├── preprocessing/
+│   ├── recgaze/                # full pipeline: page-divide -> renders -> manifests -> dataset
+│   └── adserp/                 # SERP sample & click-AOI dataset build
+├── llm_models/                 # local VLM checkpoints (download here)
+├── outputs/  checkpoints/      # run artifacts (created at runtime)
 └── requirements.txt
 ```
 
-## 😄Acknowledgements
+## 😄 Acknowledgements
 
 - [RecGaze](https://github.com/santideleon/RecGaze_Dataset) for the eye-tracking dataset in carousel-based recommendation
 - [AdSERP](https://github.com/kayhan-latifzadeh/AdSERP) for the eye-tracking dataset in sponsored search

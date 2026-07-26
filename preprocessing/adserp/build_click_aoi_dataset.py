@@ -1,8 +1,3 @@
-"""
-Build a click-AOI subset from AdSERP: one sample per trial = last scroll stop before click.
-Copies viewport crops from build_samples scroll_stops cache; writes samples.jsonl and images/.
-"""
-
 import os
 import json
 import shutil
@@ -36,11 +31,10 @@ SAMPLES_DIR = Path(
         _REPO_ROOT / "datasets" / "Adserp" / "samples" / "scroll_stops",
     )
 )
-OUTPUT_DIR = Path(os.environ.get("ADSERP_CLICK_AOI_OUT", _REPO_ROOT / "fixate" / "fixate_training"))
+OUTPUT_DIR = Path(os.environ.get("ADSERP_CLICK_AOI_OUT", _REPO_ROOT / "datasets" / "Adserp"))
 
 
 def load_organic_aois(trial_id: str) -> list[dict]:
-    """Load organic result AOIs (full-page screenshot coordinates)."""
     path = DATA_DIR / "organic-aoi-data" / f"{trial_id}.json"
     if not path.exists():
         return []
@@ -66,7 +60,6 @@ def load_organic_aois(trial_id: str) -> list[dict]:
 
 
 def load_ad_aois(trial_id: str) -> list[dict]:
-    """Load ad AOIs (native_ad / dd_top / dd_right)."""
     path = DATA_DIR / "ad-boundary-data" / f"{trial_id}.json"
     if not path.exists():
         return []
@@ -97,7 +90,6 @@ def compute_gaze_dwell(
     t_start: int,
     t_end: int,
 ) -> int:
-    """Total fixation duration (ms) inside bbox for timestamps in [t_start, t_end]."""
     df = fixations[(fixations["timestamp"] >= t_start) & (fixations["timestamp"] <= t_end)]
     x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
     in_aoi = (df["FPOGX"] >= x1) & (df["FPOGX"] <= x2) & (df["FPOGY"] >= y1) & (df["FPOGY"] <= y2)
@@ -111,7 +103,6 @@ def compute_cursor_dwell(
     t_start: int,
     t_end: int,
 ) -> int:
-    """Accumulated time (ms) with cursor page position inside bbox between mousemove events."""
     events = mouse_df[
         mouse_df["event"].isin(["mousemove", "mouseover"])
         & (mouse_df["timestamp"] >= t_start)
@@ -138,7 +129,6 @@ def compute_cursor_dwell(
 
 
 def find_clicked_aoi(aois: list[dict], click_label: dict) -> Optional[int]:
-    """Return aoi_id (list index) for the clicked AOI, or None."""
     if click_label.get("action") != "click":
         return None
 
@@ -160,7 +150,6 @@ def find_clicked_aoi(aois: list[dict], click_label: dict) -> Optional[int]:
 
 
 def build_sample(trial_id: str) -> Optional[tuple[dict, Path]]:
-    """Return (sample_dict, viewport_src_path) or None if no valid click step."""
     steps_path = SAMPLES_DIR / trial_id / "steps.json"
     if not steps_path.exists():
         return None

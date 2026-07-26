@@ -1,10 +1,3 @@
-"""
-AdSERP sample builder: full_page (whole screenshot + gaze map) and/or scroll_stop
-(viewport crops per dwell step). Coordinates: SCALE = 1280/1422; fixations are screenshot px.
-
-CLI: build_samples.py --mode full_page|scroll_stop|both [--trials ID ...] [--n N]
-"""
-
 import os
 import re
 import csv
@@ -69,19 +62,16 @@ def load_trial_meta(trial_id: str) -> dict:
 
 
 def load_fixations(trial_id: str) -> pd.DataFrame:
-    """Fixation table; coordinates are already screenshot pixels."""
     df = pd.read_csv(DATA_DIR / 'fixation-data' / f'{trial_id}.csv')
     return df[['timestamp', 'FPOGX', 'FPOGY', 'FPOGD']].copy()
 
 
 def load_mouse(trial_id: str) -> pd.DataFrame:
-    """Raw mouse event CSV."""
     df = pd.read_csv(DATA_DIR / 'mouse-movement-data' / f'{trial_id}.csv')
     return df
 
 
 def get_scroll_timeline(mouse_df: pd.DataFrame) -> pd.DataFrame:
-    """Scroll events: timestamp, scroll_y_px (screenshot px, CSS ypos * SCALE)."""
     sc = mouse_df[mouse_df['event'] == 'scroll'][['timestamp', 'ypos']].copy()
     sc = sc.rename(columns={'ypos': 'scroll_y_px'})
     sc['scroll_y_px'] = (sc['scroll_y_px'] * SCALE).round().astype(int)
@@ -90,13 +80,11 @@ def get_scroll_timeline(mouse_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_scroll_at(timeline: pd.DataFrame, timestamp: int) -> int:
-    """Scroll offset in screenshot px at or before timestamp."""
     before = timeline[timeline['timestamp'] <= timestamp]
     return int(before['scroll_y_px'].iloc[-1]) if len(before) > 0 else 0
 
 
 def get_click_event(mouse_df: pd.DataFrame) -> Optional[dict]:
-    """First click row; page coords use clientY * SCALE + scroll_y."""
     clicks = mouse_df[mouse_df['event'] == 'click']
     if len(clicks) == 0:
         return None
@@ -110,7 +98,6 @@ def get_click_event(mouse_df: pd.DataFrame) -> Optional[dict]:
 
 
 def resolve_click_page_coords(click: dict, timeline: pd.DataFrame) -> tuple[int, int]:
-    """Map click client coords to full-page screenshot (page_x, page_y)."""
     scroll_y = get_scroll_at(timeline, click['timestamp'])
     screen_x = round(click['xpos_css'] * SCALE)
     screen_y = round(click['ypos_css'] * SCALE)
@@ -120,7 +107,6 @@ def resolve_click_page_coords(click: dict, timeline: pd.DataFrame) -> tuple[int,
 
 
 def classify_click(xpath: str) -> dict:
-    """Infer click_type and organic_rank from xpath."""
     result = {'click_type': 'other', 'organic_rank': None}
     if '#rso' in xpath or "[@id='rso']" in xpath:
         result['click_type'] = 'organic'
@@ -128,7 +114,7 @@ def classify_click(xpath: str) -> dict:
         if m:
             result['organic_rank'] = int(m.group(1))
         else:
-            result['organic_rank'] = 1  # omitted div[1] in xpath
+            result['organic_rank'] = 1
     elif '#tads' in xpath or "[@id='tads']" in xpath:
         result['click_type'] = 'ad_top'
     elif '#tadsb' in xpath or "[@id='tadsb']" in xpath:
@@ -148,7 +134,6 @@ def build_gaze_map(fixations: pd.DataFrame,
                    t_start: Optional[int] = None,
                    t_end:   Optional[int] = None,
                    y_min_content: int = 0) -> np.ndarray:
-    """Gaussian-smoothed dwell heatmap, normalized to [0, 1]. y_min_content drops top-of-page fixations."""
     df = fixations.copy()
     if t_start is not None:
         df = df[df['timestamp'] >= t_start]
@@ -179,7 +164,6 @@ def build_gaze_map(fixations: pd.DataFrame,
 def gaze_map_to_overlay(img_bgr: np.ndarray,
                          gaze_map: np.ndarray,
                          alpha: float = 0.5) -> np.ndarray:
-    """Overlay gaze heatmap on BGR image for visualization."""
     heatmap = (gaze_map * 255).astype(np.uint8)
     heatmap_color = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
     mask = (gaze_map > 0.01).astype(np.float32)[..., None]
@@ -192,7 +176,6 @@ def detect_scroll_stops(mouse_df: pd.DataFrame,
                          timeline: pd.DataFrame,
                          click: Optional[dict],
                          min_dwell_ms: int = MIN_DWELL_MS) -> list[dict]:
-    """Dwell segments between scrolls; gaps >= min_dwell_ms count as stops (incl. load→first scroll)."""
     stops = []
 
     t_load = int(mouse_df[mouse_df['event'].isin(['load', 'pageshow'])]['timestamp'].min())
@@ -250,7 +233,6 @@ def infer_action_from_stops(stops: list[dict],
                              click: Optional[dict],
                              click_page_x: int,
                              click_page_y: int) -> dict:
-    """Label for this step from current vs next stop; last step is click or end."""
     is_last = (step_idx == len(stops) - 1)
 
     if is_last:
@@ -279,7 +261,6 @@ def build_fullpage_sample(trial_id: str,
                            participants: dict,
                            out_dir: Path,
                            save_viz: bool = True) -> Optional[dict]:
-    """One full-page sample per trial (requires a click)."""
     pid = trial_id.split('-')[0]
     meta       = load_trial_meta(trial_id)
     fixations  = load_fixations(trial_id)
@@ -358,7 +339,6 @@ def build_scrollstop_samples(trial_id: str,
                               participants: dict,
                               out_dir: Path,
                               save_viz: bool = True) -> list[dict]:
-    """One sample per scroll stop (viewport crop + gaze); N samples per trial."""
     pid = trial_id.split('-')[0]
     meta       = load_trial_meta(trial_id)
     fixations  = load_fixations(trial_id)
